@@ -1,184 +1,317 @@
-; Master code 
-; V1, basic traffic light
-
 #define __SFR_OFFSET 0x00
-#include "avr/io.h"
+#include <avr/io.h>
 
-#define RED_TIME 10 ; set red light to 10s (testing purposes)
-#define GREEN_TIME 5 ; set green light to 5s (testing purposes)
-#define YELLOW_TIME 2
-
-#define PIN_RED 0
-#define PIN_YEL 1
-#define PIN_GRN 2
-
-; set operating time here (in hex)
-#define OPERATING_TIME_H 0x05
-#define OPERATING_TIME_M 0x00
-#define OPERATING_TIME_S 0x00
-
-; set stanbdy time here (in hex)
-#define STANDBY_TIME_H 0x14
-#define STANDBY_TIME_M 0x00
-#define STANDBY_TIME_S 0x00
+#define GREEN_TIME 3
+#define YELLOW_TIME 1
+#define HOUR_SWITCH_MODE 0x19
+#define HOUR_WAKE 0x00
+#define YEL_D_MASK ((1<<4)|(1<<7))
+#define YEL_B_MASK (1<<2)
 
 .global main
 
+.section .bss
+last_switch: .byte 1
+
+.section .text
 main:
-  ; initialize TWI 
-  ; Assuming 16MHz CPU Clock. 
-  ; TWBR = ((16,000,000 / 100,000) - 16) / 2 = 72 = 0x48
-  LDI R16, 0x48
-  STS TWBR, R16
-  ; Set Prescaler to 1 (TWPS0 = 0, TWPS1 = 0 in TWSR)
-  CLR R16
-  STS TWSR, R16
-
-  ; Set Baud Rate to 9600 (UBRR = 103 for 16MHz)
-  LDI R16, hi8(103)
-  STS UBRR0H, R16
-  LDI R16, lo8(103)
-  STS UBRR0L, R16
-
-  ; Enable Transmitter only (TXEN0)
-  LDI R16, (1<<TXEN0)
-  STS UCSR0B, R16
-
-  ; Format: 8 data bits, 1 stop bit
-  LDI R16, (1<<UCSZ01) | (1<<UCSZ00)
-  STS UCSR0C, R16
-
-  ; set PD2-7 as output
-  LDI R16, 0b11111100
-  OUT DDRD, R16 
-
-  ; set PB0-2 as output
-  LDI R16, 0b00000111 
-  OUT DDRB, R16
-
-  ; Timer0 CTC Mode
-  LDI R20, (1<<WGM01)
-  OUT TCCR0A, R20
+    RCALL twi_init
+    RCALL uart_init
+    LDI R16, 0b11111100
+    OUT DDRD, R16
+    LDI R16, 0b00001111
+    OUT DDRB, R16
+    IN R16, DDRC
+    ANDI R16, ~(1<<0)
+    OUT DDRC, R16
+    IN R16, PORTC
+    ORI R16, (1<<0)
+    OUT PORTC, R16
+    LDI R20, (1<<WGM01)
+    OUT TCCR0A, R20
 
 intersection_loop:
-  ; check if time is at STANDBY_TIME
+    RCALL log_time
+    RCALL read_rtc
+    MOV R16, R22
+    ANDI R16, 0x3F
+    RCALL check_night_hour
+    
+    IN R16, PINC
+    ANDI R16, 1
+    STS last_switch, R16
+    
+    CLR R18
+    SBRS R16, 0
+    LDI R18, 1
+    
+    EOR R17, R18
+    TST R17
+    BRNE execute_yellow
+    RJMP normal_cycle
 
-  ; check if time is at OPERATING_TIME
-  RCALL read_rtc
-  RCALL log_time
-; --- STATE 1: L1 Green, L2 Red, L3 Red ---
-    ; PORTD: L1_Grn (PD4) | L2_Red (PD5) = 0011 0000 = 0x30
-    ; PORTB: L3_Red (PB0) = 0x01
-    LDI R16, 0x30
+execute_yellow:
+    LDI R16, YEL_D_MASK
     OUT PORTD, R16
-    LDI R16, 0x01
+    LDI R16, YEL_B_MASK
     OUT PORTB, R16
-    LDI R18, GREEN_TIME
-    RCALL delay_seconds
-
-    ; --- STATE 2: L1 Yellow, L2 Red, L3 Red ---
-    ; PORTD: L1_Yel (PD3) | L2_Red (PD5) = 0010 1000 = 0x28
-    ; PORTB: L3_Red (PB0) = 0x01
-    LDI R16, 0x28
+    RCALL delay_500ms
+    TST R25
+    BRNE intersection_loop
+    CLR R16
     OUT PORTD, R16
-    LDI R16, 0x01
     OUT PORTB, R16
-    LDI R18, YELLOW_TIME
-    RCALL delay_seconds
-
-    ; --- STATE 3: L1 Red, L2 Green, L3 Red ---
-    ; PORTD: L1_Red (PD2) | L2_Grn (PD7) = 1000 0100 = 0x84
-    ; PORTB: L3_Red (PB0) = 0x01
-    LDI R16, 0x84
-    OUT PORTD, R16
-    LDI R16, 0x01
-    OUT PORTB, R16
-    LDI R18, GREEN_TIME
-    RCALL delay_seconds
-
-    ; --- STATE 4: L1 Red, L2 Yellow, L3 Red ---
-    ; PORTD: L1_Red (PD2) | L2_Yel (PD6) = 0100 0100 = 0x44
-    ; PORTB: L3_Red (PB0) = 0x01
-    LDI R16, 0x44
-    OUT PORTD, R16
-    LDI R16, 0x01
-    OUT PORTB, R16
-    LDI R18, YELLOW_TIME
-    RCALL delay_seconds
-
-    ; --- STATE 5: L1 Red, L2 Red, L3 Green ---
-    ; PORTD: L1_Red (PD2) | L2_Red (PD5) = 0010 0100 = 0x24
-    ; PORTB: L3_Grn (PB2) = 0x04
-    LDI R16, 0x24
-    OUT PORTD, R16
-    LDI R16, 0x04
-    OUT PORTB, R16
-    LDI R18, GREEN_TIME
-    RCALL delay_seconds
-
-    ; --- STATE 6: L1 Red, L2 Red, L3 Yellow ---
-    ; PORTD: L1_Red (PD2) | L2_Red (PD5) = 0010 0100 = 0x24
-    ; PORTB: L3_Yel (PB1) = 0x02
-    LDI R16, 0x24
-    OUT PORTD, R16
-    LDI R16, 0x02
-    OUT PORTB, R16
-    LDI R18, YELLOW_TIME
-    RCALL delay_seconds
-
-    ; Loop forever
+    RCALL delay_500ms
+    TST R25
+    BRNE intersection_loop
     RJMP intersection_loop
 
+normal_cycle:
+    LDI R30, lo8(str_utara_siap)
+    LDI R31, hi8(str_utara_siap)
+    RCALL print_str_pm
+    LDI R16, (1<<4)|(1<<6)
+    OUT PORTD, R16
+    LDI R16, (1<<1)
+    OUT PORTB, R16
+    LDI R18, YELLOW_TIME
+    RCALL delay_seconds
+    TST R25
+    BREQ skip_abort_1
+    RJMP intersection_loop
+skip_abort_1:
 
-/* ══════════════════════════════════════════════════════════════════════════════
-   SUBROUTINE: delay_seconds
-   Input: R18 (Number of seconds)
-   ══════════════════════════════════════════════════════════════════════════════ */
-delay_seconds:
-    TST R18                 ; Check if seconds counter is 0
-    BREQ delay_done         ; If 0, exit subroutine
+    LDI R30, lo8(str_utara_hijau)
+    LDI R31, hi8(str_utara_hijau)
+    RCALL print_str_pm
+    LDI R16, (1<<5)|(1<<6)
+    OUT PORTD, R16
+    LDI R16, (1<<1)
+    OUT PORTB, R16
+    LDI R23, GREEN_TIME
+    RCALL print_countdown
+    TST R25
+    BREQ skip_abort_2
+    RJMP intersection_loop
+skip_abort_2:
 
-    LDI R19, 100            ; 100 loops of 10ms = 1 second
-    LDI R16, 155            ; 155 ticks * 64us = ~9.98ms per loop
+    LDI R30, lo8(str_utara_kuning)
+    LDI R31, hi8(str_utara_kuning)
+    RCALL print_str_pm
+    LDI R16, (1<<4)|(1<<6)
+    OUT PORTD, R16
+    LDI R16, (1<<1)
+    OUT PORTB, R16
+    LDI R18, YELLOW_TIME
+    RCALL delay_seconds
+    TST R25
+    BREQ skip_abort_3
+    RJMP intersection_loop
+skip_abort_3:
+
+    LDI R30, lo8(str_selatan_siap)
+    LDI R31, hi8(str_selatan_siap)
+    RCALL print_str_pm
+    LDI R16, (1<<3)|(1<<7)
+    OUT PORTD, R16
+    LDI R16, (1<<1)
+    OUT PORTB, R16
+    LDI R18, YELLOW_TIME
+    RCALL delay_seconds
+    TST R25
+    BREQ skip_abort_4
+    RJMP intersection_loop
+skip_abort_4:
+
+    LDI R30, lo8(str_selatan_hijau)
+    LDI R31, hi8(str_selatan_hijau)
+    RCALL print_str_pm
+    LDI R16, (1<<3)
+    OUT PORTD, R16
+    LDI R16, (1<<0)|(1<<1)
+    OUT PORTB, R16
+    LDI R23, GREEN_TIME
+    RCALL print_countdown
+    TST R25
+    BREQ skip_abort_5
+    RJMP intersection_loop
+skip_abort_5:
+
+    LDI R30, lo8(str_selatan_kuning)
+    LDI R31, hi8(str_selatan_kuning)
+    RCALL print_str_pm
+    LDI R16, (1<<3)|(1<<7)
+    OUT PORTD, R16
+    LDI R16, (1<<1)
+    OUT PORTB, R16
+    LDI R18, YELLOW_TIME
+    RCALL delay_seconds
+    TST R25
+    BREQ skip_abort_6
+    RJMP intersection_loop
+skip_abort_6:
+
+    LDI R30, lo8(str_timur_siap)
+    LDI R31, hi8(str_timur_siap)
+    RCALL print_str_pm
+    LDI R16, (1<<3)|(1<<6)
+    OUT PORTD, R16
+    LDI R16, (1<<2)
+    OUT PORTB, R16
+    LDI R18, YELLOW_TIME
+    RCALL delay_seconds
+    TST R25
+    BREQ skip_abort_7
+    RJMP intersection_loop
+skip_abort_7:
+
+    LDI R30, lo8(str_timur_hijau)
+    LDI R31, hi8(str_timur_hijau)
+    RCALL print_str_pm
+    LDI R16, (1<<3)|(1<<6)
+    OUT PORTD, R16
+    LDI R16, (1<<3)
+    OUT PORTB, R16
+    LDI R23, GREEN_TIME
+    RCALL print_countdown
+    TST R25
+    BREQ skip_abort_8
+    RJMP intersection_loop
+skip_abort_8:
+
+    LDI R30, lo8(str_timur_kuning)
+    LDI R31, hi8(str_timur_kuning)
+    RCALL print_str_pm
+    LDI R16, (1<<3)|(1<<6)
+    OUT PORTD, R16
+    LDI R16, (1<<2)
+    OUT PORTB, R16
+    LDI R18, YELLOW_TIME
+    RCALL delay_seconds
+    TST R25
+    BREQ skip_abort_9
+    RJMP intersection_loop
+skip_abort_9:
+
+    RJMP intersection_loop
+
+check_abort_normal:
+    CLR R25
+    IN R16, PINC
+    ANDI R16, 1
+    LDS R17, last_switch
+    CP R16, R17
+    BREQ can_done
+    LDI R25, 1
+can_done:
+    RET
+
+check_night_hour:
+    CPI R16, HOUR_SWITCH_MODE
+    BRSH cnh_night
+    CPI R16, HOUR_WAKE
+    BRLO cnh_night
+    CLR R17
+    RET
+cnh_night:
+    LDI R17, 1
+    RET
+
+delay_500ms:
+    CLR R25
+    LDI R19, 50
+    LDI R16, 155
     OUT OCR0A, R16
-
-    ; Start Timer0 with 1024 prescaler (CS02, CS00)
-    LDI R16, (1<<CS02) | (1<<CS00)
+    LDI R16, (1<<CS02)|(1<<CS00)
     OUT TCCR0B, R16
-
-loop_10ms:
-    ; Reset Timer0 Counter
+d500_loop:
     CLR R16
     OUT TCNT0, R16
-
-    ; Clear the Compare Match Flag by writing logic 1
     LDI R16, (1<<OCF0A)
     OUT TIFR0, R16
-
-wait_flag:
-    ; Poll the flag
+d500_wait:
+    RCALL check_abort_normal
+    TST R25
+    BRNE d500_abort
     IN R16, TIFR0
-    SBRS R16, OCF0A         ; Skip next instruction if flag is set
-    RJMP wait_flag          ; Keep checking
-
-    DEC R19                 ; Decrement the 100-loop counter
-    BRNE loop_10ms          ; If not 0, do another 10ms
-
-    ; 1 second is complete
-    DEC R18                 ; Decrement the seconds counter
-    RJMP delay_seconds      ; Do another second if R18 is not 0
-
-delay_done:
-    ; Stop Timer0
+    SBRS R16, OCF0A
+    RJMP d500_wait
+    DEC R19
+    BRNE d500_loop
+d500_abort:
     CLR R16
     OUT TCCR0B, R16
     RET
 
-/* ══════════════════════════════════════════════════════════════════════════════
-   TWI (I2C) DRIVER LIBRARY FOR ATMEGA328P
-   ══════════════════════════════════════════════════════════════════════════════ */
+delay_seconds:
+    CLR R25
+    TST R18
+    BREQ delay_done
+    LDI R19, 100
+    LDI R16, 155
+    OUT OCR0A, R16
+    LDI R16, (1<<CS02)|(1<<CS00)
+    OUT TCCR0B, R16
+loop_10ms:
+    CLR R16
+    OUT TCNT0, R16
+    LDI R16, (1<<OCF0A)
+    OUT TIFR0, R16
+wait_flag:
+    RCALL check_abort_normal
+    TST R25
+    BRNE delay_abort
+    IN R16, TIFR0
+    SBRS R16, OCF0A
+    RJMP wait_flag
+    DEC R19
+    BRNE loop_10ms
+    DEC R18
+    RJMP delay_seconds
+delay_abort:
+delay_done:
+    CLR R16
+    OUT TCCR0B, R16
+    RET
+
+print_str_pm:
+    LPM R16, Z+
+    TST R16
+    BREQ psp_done
+    RCALL uart_tx
+    RJMP print_str_pm
+psp_done:
+    RET
+
+print_countdown:
+pcd_loop:
+    TST R23
+    BREQ pcd_done
+    MOV R16, R23
+    ORI R16, 0x30
+    RCALL uart_tx
+    LDI R16, ' '
+    RCALL uart_tx
+    PUSH R23
+    LDI R18, 1
+    RCALL delay_seconds
+    POP R23
+    TST R25
+    BRNE pcd_done
+    DEC R23
+    RJMP pcd_loop
+pcd_done:
+    RET
+
+twi_init:
+    LDI R16, 0x48
+    STS TWBR, R16
+    CLR R16
+    STS TWSR, R16
+    RET
+
 twi_start:
-    LDI R16, (1<<TWINT) | (1<<TWSTA) | (1<<TWEN)
+    LDI R16, (1<<TWINT)|(1<<TWSTA)|(1<<TWEN)
     STS TWCR, R16
 wait_start:
     LDS R16, TWCR
@@ -186,16 +319,14 @@ wait_start:
     RJMP wait_start
     RET
 
-; --- 3. Send STOP Condition ---
 twi_stop:
-    LDI R16, (1<<TWINT) | (1<<TWSTO) | (1<<TWEN)
+    LDI R16, (1<<TWINT)|(1<<TWSTO)|(1<<TWEN)
     STS TWCR, R16
     RET
 
-; --- 4. Write Byte (Byte to send must be in R18) ---
 twi_write:
     STS TWDR, R18
-    LDI R16, (1<<TWINT) | (1<<TWEN)
+    LDI R16, (1<<TWINT)|(1<<TWEN)
     STS TWCR, R16
 wait_write:
     LDS R16, TWCR
@@ -203,10 +334,8 @@ wait_write:
     RJMP wait_write
     RET
 
-; --- 5. Read Byte + send ACK (to read multiple bytes) ---
-; Result will be stored in R18
 twi_read_ack:
-    LDI R16, (1<<TWINT) | (1<<TWEN) | (1<<TWEA)
+    LDI R16, (1<<TWINT)|(1<<TWEN)|(1<<TWEA)
     STS TWCR, R16
 wait_read_ack:
     LDS R16, TWCR
@@ -215,10 +344,8 @@ wait_read_ack:
     LDS R18, TWDR
     RET
 
-; --- 6. Read Byte + send NACK (for the very last byte) ---
-; Result will be stored in R18
 twi_read_nack:
-    LDI R16, (1<<TWINT) | (1<<TWEN)
+    LDI R16, (1<<TWINT)|(1<<TWEN)
     STS TWCR, R16
 wait_read_nack:
     LDS R16, TWCR
@@ -227,114 +354,81 @@ wait_read_nack:
     LDS R18, TWDR
     RET
 
-/* ══════════════════════════════════════════════════════════════════════════════
-   READ DS3231 RTC
-   This reads Seconds, Minutes, and Hours into R20, R21, and R22.
-   ══════════════════════════════════════════════════════════════════════════════ */
 read_rtc:
-    ; 1. Send START
     RCALL twi_start
-
-    ; 2. Send DS3231 Write Address (0xD0)
     LDI R18, 0xD0
     RCALL twi_write
-
-    ; 3. Send Register Pointer (0x00 to start at Seconds)
     LDI R18, 0x00
     RCALL twi_write
-
-    ; 4. Send REPEATED START (switches from writing to reading)
     RCALL twi_start
-
-    ; 5. Send DS3231 Read Address (0xD1)
     LDI R18, 0xD1
     RCALL twi_write
-
-    ; 6. Read Seconds (Register 0x00) and send ACK
     RCALL twi_read_ack
-    MOV R20, R18       ; Save seconds to R20
-
-    ; 7. Read Minutes (Register 0x01) and send ACK
+    MOV R20, R18
     RCALL twi_read_ack
-    MOV R21, R18       ; Save minutes to R21
-
-    ; 8. Read Hours (Register 0x02) and send NACK (because it's the last byte)
+    MOV R21, R18
     RCALL twi_read_nack
-    MOV R22, R18       ; Save hours to R22
-
-    ; 9. Send STOP
+    MOV R22, R18
     RCALL twi_stop
-    
     RET
 
-/* ══════════════════════════════════════════════════════════════════════════════
-   UART TRANSMIT LIBRARY (9600 Baud @ 16MHz)
-   ══════════════════════════════════════════════════════════════════════════════ */
+uart_init:
+    LDI R16, 0
+    STS UBRR0H, R16
+    LDI R16, 103
+    STS UBRR0L, R16
+    LDI R16, (1<<TXEN0)
+    STS UCSR0B, R16
+    LDI R16, (1<<UCSZ01)|(1<<UCSZ00)
+    STS UCSR0C, R16
+    RET
 
-; --- Transmit a single character stored in R16 ---
 uart_tx:
     LDS R17, UCSR0A
-    SBRS R17, UDRE0      ; Check if transmit buffer is empty
-    RJMP uart_tx         ; If not, wait
-    STS UDR0, R16        ; Send the character
+    SBRS R17, UDRE0
+    RJMP uart_tx
+    STS UDR0, R16
     RET
 
-/* ══════════════════════════════════════════════════════════════════════════════
-   BCD TO ASCII TRANSMITTER
-   Input: R18 contains the BCD byte (e.g., 0x45)
-   Output: Transmits '4' then '5' over Serial
-   ══════════════════════════════════════════════════════════════════════════════ */
 bcd_to_ascii_tx:
-    ; --- Extract and send the HIGH nibble (Tens digit) ---
     MOV R16, R18
-    SWAP R16             ; Swap nibbles (0x45 becomes 0x54)
-    ANDI R16, 0x0F       ; Mask out the top half (0x54 becomes 0x04)
-    ORI R16, 0x30        ; Convert to ASCII (0x04 becomes 0x34, which is '4')
+    SWAP R16
+    ANDI R16, 0x0F
+    ORI R16, 0x30
     RCALL uart_tx
-
-    ; --- Extract and send the LOW nibble (Ones digit) ---
     MOV R16, R18
-    ANDI R16, 0x0F       ; Mask out the top half (0x45 becomes 0x05)
-    ORI R16, 0x30        ; Convert to ASCII (0x05 becomes 0x35, which is '5')
+    ANDI R16, 0x0F
+    ORI R16, 0x30
     RCALL uart_tx
-    
     RET
 
-/* ══════════════════════════════════════════════════════════════════════════════
-   LOG TIME TO SERIAL (Format: HH:MM:SS)
-   ══════════════════════════════════════════════════════════════════════════════ */
 log_time:
-    ; Read the time (Assuming read_rtc puts Sec in R20, Min in R21, Hr in R22)
     RCALL read_rtc
-
-    ; --- Print Hours ---
     MOV R18, R22
-    ; The DS3231 Hour register has control bits on the top end. 
-    ; We mask them out (0x3F) to ensure we only get the hour numbers.
-    ANDI R18, 0x3F       
+    ANDI R18, 0x3F
     RCALL bcd_to_ascii_tx
-
-    ; --- Print ':' ---
     LDI R16, ':'
     RCALL uart_tx
-
-    ; --- Print Minutes ---
     MOV R18, R21
     RCALL bcd_to_ascii_tx
-
-    ; --- Print ':' ---
     LDI R16, ':'
     RCALL uart_tx
-
-    ; --- Print Seconds ---
     MOV R18, R20
     RCALL bcd_to_ascii_tx
-
-    ; --- Print Newline (\r\n) ---
     LDI R16, '\r'
     RCALL uart_tx
     LDI R16, '\n'
     RCALL uart_tx
-
     RET
 
+str_utara_siap: .asciz "Utara: PERSIAPAN\r\n"
+str_utara_hijau: .asciz "Utara: HIJAU - "
+str_utara_kuning: .asciz "\r\nUtara: KUNING\r\n"
+
+str_selatan_siap: .asciz "Selatan: PERSIAPAN\r\n"
+str_selatan_hijau: .asciz "Selatan: HIJAU - "
+str_selatan_kuning: .asciz "\r\nSelatan: KUNING\r\n"
+
+str_timur_siap: .asciz "Timur: PERSIAPAN\r\n"
+str_timur_hijau: .asciz "Timur: HIJAU - "
+str_timur_kuning: .asciz "\r\nTimur: KUNING\r\n"
