@@ -12,11 +12,42 @@
 #define PIN_YEL 1
 #define PIN_GRN 2
 
+; set operating time here (in hex)
+#define OPERATING_TIME_H 0x05
+#define OPERATING_TIME_M 0x00
+#define OPERATING_TIME_S 0x00
+
+; set stanbdy time here (in hex)
+#define STANDBY_TIME_H 0x14
+#define STANDBY_TIME_M 0x00
+#define STANDBY_TIME_S 0x00
+
 .global main
 
 main:
-  RCALL twi_init
-  RCALL uart_init
+  ; initialize TWI 
+  ; Assuming 16MHz CPU Clock. 
+  ; TWBR = ((16,000,000 / 100,000) - 16) / 2 = 72 = 0x48
+  LDI R16, 0x48
+  STS TWBR, R16
+  ; Set Prescaler to 1 (TWPS0 = 0, TWPS1 = 0 in TWSR)
+  CLR R16
+  STS TWSR, R16
+
+  ; Set Baud Rate to 9600 (UBRR = 103 for 16MHz)
+  LDI R16, hi8(103)
+  STS UBRR0H, R16
+  LDI R16, lo8(103)
+  STS UBRR0L, R16
+
+  ; Enable Transmitter only (TXEN0)
+  LDI R16, (1<<TXEN0)
+  STS UCSR0B, R16
+
+  ; Format: 8 data bits, 1 stop bit
+  LDI R16, (1<<UCSZ01) | (1<<UCSZ00)
+  STS UCSR0C, R16
+
   ; set PD2-7 as output
   LDI R16, 0b11111100
   OUT DDRD, R16 
@@ -30,6 +61,9 @@ main:
   OUT TCCR0A, R20
 
 intersection_loop:
+  ; check if time is at STANDBY_TIME
+
+  ; check if time is at OPERATING_TIME
   RCALL read_rtc
   RCALL log_time
 ; --- STATE 1: L1 Green, L2 Red, L3 Red ---
@@ -143,19 +177,6 @@ delay_done:
 /* ══════════════════════════════════════════════════════════════════════════════
    TWI (I2C) DRIVER LIBRARY FOR ATMEGA328P
    ══════════════════════════════════════════════════════════════════════════════ */
-
-; --- 1. Initialize TWI (Set speed to 100kHz) ---
-twi_init:
-    ; Assuming 16MHz CPU Clock. 
-    ; TWBR = ((16,000,000 / 100,000) - 16) / 2 = 72 = 0x48
-    LDI R16, 0x48
-    STS TWBR, R16
-    ; Set Prescaler to 1 (TWPS0 = 0, TWPS1 = 0 in TWSR)
-    CLR R16
-    STS TWSR, R16
-    RET
-
-; --- 2. Send START Condition ---
 twi_start:
     LDI R16, (1<<TWINT) | (1<<TWSTA) | (1<<TWEN)
     STS TWCR, R16
@@ -249,22 +270,6 @@ read_rtc:
 /* ══════════════════════════════════════════════════════════════════════════════
    UART TRANSMIT LIBRARY (9600 Baud @ 16MHz)
    ══════════════════════════════════════════════════════════════════════════════ */
-
-uart_init:
-    ; Set Baud Rate to 9600 (UBRR = 103 for 16MHz)
-    LDI R16, hi8(103)
-    STS UBRR0H, R16
-    LDI R16, lo8(103)
-    STS UBRR0L, R16
-
-    ; Enable Transmitter only (TXEN0)
-    LDI R16, (1<<TXEN0)
-    STS UCSR0B, R16
-
-    ; Format: 8 data bits, 1 stop bit
-    LDI R16, (1<<UCSZ01) | (1<<UCSZ00)
-    STS UCSR0C, R16
-    RET
 
 ; --- Transmit a single character stored in R16 ---
 uart_tx:
