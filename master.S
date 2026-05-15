@@ -9,11 +9,17 @@
 #define YEL_B_MASK (1<<2)
 
 .global main
+.global INT0_vect
 
 .section .bss
+siren_flag: .byte 1
 last_switch: .byte 1
 
 .section .text
+.org 0x0000
+    rjmp main
+.org 0x0002
+    rjmp isr_int0
 main:
     RCALL twi_init
     RCALL uart_init
@@ -30,7 +36,21 @@ main:
     LDI R20, (1<<WGM01)
     OUT TCCR0A, R20
 
+    LDI R16, (1<<ISC01) | (1<<ISC00)
+    STS EICRA, R16
+    LDI R16, (1<<INT0)
+    OUT EIMSK, R16
+    CLR R16
+    STS siren_flag, R16
+    SEI
+
 intersection_loop:
+    LDS R16, siren_flag
+    CPI R16, 1
+    BRNE skip_siren
+    RJMP do_siren_mode
+skip_siren:
+
     RCALL log_time
     RCALL read_rtc
     MOV R16, R22
@@ -274,6 +294,18 @@ delay_done:
     OUT TCCR0B, R16
     RET
 
+delay_100ms:
+    LDI R21, 100
+d1: LDI R22, 200
+d2: LDI R23, 20
+d3: DEC R23
+    BRNE d3
+    DEC R22
+    BRNE d2
+    DEC R21
+    BRNE d1
+    RET
+
 print_str_pm:
     LPM R16, Z+
     TST R16
@@ -420,6 +452,31 @@ log_time:
     LDI R16, '\n'
     RCALL uart_tx
     RET
+
+do_siren_mode:
+    LDI R16, 0b01001000
+    OUT PORTD, R16
+    LDI R16, 0b00000010
+    OUT PORTB, R16
+    LDI R20, 50
+siren_wait:
+    RCALL delay_100ms
+    DEC R20
+    BRNE siren_wait
+    CLR R16
+    STS siren_flag, R16
+    RJMP intersection_loop
+
+isr_int0:
+    PUSH R16
+    IN R16, SREG
+    PUSH R16
+    LDI R16, 1
+    STS siren_flag, R16
+    POP R16
+    OUT SREG, R16
+    POP R16
+    RETI
 
 str_utara_siap: .asciz "Utara: PERSIAPAN\r\n"
 str_utara_hijau: .asciz "Utara: HIJAU - "
