@@ -1,36 +1,14 @@
-/*
- * slave_siren.S — Ambulance Siren Detector, Slave Arduino (ATmega328P @ 16MHz)
- *
- * Goertzel algorithm, two bins: 800 Hz and 1500 Hz
- * Sample rate : 8000 Hz via Timer0 CTC
- * Window size : N = 100  → 12.5 ms per window
- * Siren model : Fast yelp, ~4 Hz alternation (250 ms/tone)
- *               Confirm after MIN_ALTS=3 clean tone alternations
- *
- * Coefficients (Q14 = coeff * 16384):
- *   800 Hz  k=10  coeff=1.618034  Q14=26510
- *   1500 Hz k=19  coeff=0.736249  Q14=12063
- *
- * Pins:
- *   PC0  ADC0   MAX4466 analog out
- *   PD2         INT pulse to Master (HIGH ~10ms = siren detected)
- *   PD0/PD1     UART RX/TX, 9600 baud
- *
- * Build:
- *   avr-gcc -mmcu=atmega328p -x assembler-with-cpp slave_siren.S -o slave_siren.elf
- *   avr-objcopy -O ihex slave_siren.elf slave_siren.hex
- */
-
+#define __SFR_OFFSET 0x00
 #include <avr/io.h>
 
-/* ── Constants ─────────────────────────────────────────────────────────────── */
+/* --- Konstanta Sistem (Format Desimal) --- */
 #define UBRR_VAL          103
 #define TIMER0_OCR        249
 #define N_SAMPLES         100
 #define COEFF_800         26510
 #define COEFF_1500        12063
-#define ENERGY_THRESH_LO  0xF080
-#define ENERGY_THRESH_HI  0x02FA
+#define ENERGY_THRESH_LO  61568    /* Ekuivalen dengan 0xF080 */
+#define ENERGY_THRESH_HI  762      /* Ekuivalen dengan 0x02FA */
 #define WINDOWS_PER_TONE  20
 #define TONE_MARGIN       8
 #define MIN_ALTS          3
@@ -41,8 +19,8 @@
 #define FSM_CONFIRMED     3
 #define INT_PIN           2
 
-/* ── SRAM ──────────────────────────────────────────────────────────────────── */
 .section .bss
+/* --- Variabel SRAM --- */
 sample_ready:   .byte 1
 adc_raw:        .byte 1
 fsm_state:      .byte 1
@@ -52,74 +30,73 @@ silence_cnt:    .byte 1
 urx_state:      .byte 1
 urx_tmp:        .byte 1
 
-/* ── IVT ───────────────────────────────────────────────────────────────────── */
 .section .text
 .global main
-.org 0x0000 ; RESET
+
+/* --- Vector Table Interupsi --- */
+.org 0
     rjmp main
-.org 0x001C ; TIMER0 COMPA
+.org 28                        /* Alamat 0x001C: TIMER0 COMPA */
     rjmp isr_t0
-.org 0x0024 ; USART RX
+.org 36                        /* Alamat 0x0024: USART RX */
     rjmp isr_rx
 
-/* ══════════════════════════════════════════════════════════════════════════════
-   MAIN
-   ══════════════════════════════════════════════════════════════════════════════ */
+/* --- Inisialisasi Utama --- */
 main:
     ldi  r16, hi8(RAMEND)
-    out  _SFR_IO_ADDR(SPH), r16
+    out  SPH, r16
     ldi  r16, lo8(RAMEND)
-    out  _SFR_IO_ADDR(SPL), r16
+    out  SPL, r16
 
-    sbi  _SFR_IO_ADDR(DDRD),  INT_PIN
-    cbi  _SFR_IO_ADDR(PORTD), INT_PIN
+    sbi  DDRD, INT_PIN         /* Konfigurasi PD2 sebagai Output Interupsi ke Master */
+    cbi  PORTD, INT_PIN
 
-    /* UART */
+    /* Inisialisasi UART (Baud 9600) */
     ldi  r16, hi8(UBRR_VAL)
     sts  UBRR0H, r16
     ldi  r16, lo8(UBRR_VAL)
     sts  UBRR0L, r16
-    ldi  r16, (1<<RXEN0)|(1<<TXEN0)|(1<<RXCIE0)
+    ldi  r16, 0b10011000       /* Mengaktifkan RXEN0, TXEN0, dan RXCIE0 */
     sts  UCSR0B, r16
-    ldi  r16, (1<<UCSZ01)|(1<<UCSZ00)
+    ldi  r16, 0b00000110       /* Format 8-bit data, 1 stop bit */
     sts  UCSR0C, r16
 
-    /* ADC: AVcc, left-adjust, ADC0, free-run, prescaler/128 */
-    ldi  r16, (1<<REFS0)|(1<<ADLAR)
+    /* Inisialisasi ADC (Free-run, Prescaler 128) */
+    ldi  r16, 0b01100000       /* Mengaktifkan Vref AVcc (REFS0) dan Left Adjust (ADLAR) */
     sts  ADMUX, r16
-    ldi  r16, (1<<ADEN)|(1<<ADATE)|(1<<ADPS2)|(1<<ADPS1)|(1<<ADPS0)
+    ldi  r16, 0b10100111       /* Mengaktifkan ADEN, ADATE, ADPS2, ADPS1, ADPS0 */
     sts  ADCSRA, r16
-    ldi  r16, 0
+    ldi  r16, 0b00000000       /* Auto-trigger di set ke Free Running Mode */
     sts  ADCSRB, r16
-    ldi  r16, (1<<ADC0D)
+    ldi  r16, 0b00000001       /* Mematikan buffer digital di pin ADC0 (Hemat daya) */
     sts  DIDR0, r16
     lds  r16, ADCSRA
-    ori  r16, (1<<ADSC)
+    ori  r16, 0b01000000       /* Menyuntikkan bit ADSC untuk memulai konversi ADC pertama */
     sts  ADCSRA, r16
 
-    /* Timer0 CTC 8kHz */
-    ldi  r16, (1<<WGM01)
-    out  _SFR_IO_ADDR(TCCR0A), r16
-    ldi  r16, (1<<CS01)
-    out  _SFR_IO_ADDR(TCCR0B), r16
+    /* Inisialisasi Timer0 (Mode CTC, 8000 Hz) */
+    ldi  r16, 0b00000010       /* Mengaktifkan bit WGM01 untuk Mode CTC */
+    out  TCCR0A, r16
+    ldi  r16, 0b00000010       /* Mengaktifkan Prescaler 8 melalui bit CS01 */
+    out  TCCR0B, r16
     ldi  r16, TIMER0_OCR
-    out  _SFR_IO_ADDR(OCR0A), r16
-    ldi  r16, (1<<OCIE0A)
+    out  OCR0A, r16
+    ldi  r16, 0b00000010       /* Mengaktifkan interupsi OCIE0A */
     sts  TIMSK0, r16
 
-    /* Zero all working registers */
-    clr  r2   /* sample_count lo */
-    clr  r3   /* sample_count hi (unused but kept for clarity) */
-    clr  r4   /* Q1_800  lo */
-    clr  r5   /* Q1_800  hi */
-    clr  r6   /* Q2_800  lo */
-    clr  r7   /* Q2_800  hi */
-    clr  r8   /* Q1_1500 lo */
-    clr  r9   /* Q1_1500 hi */
-    clr  r10  /* Q2_1500 lo */
-    clr  r11  /* Q2_1500 hi */
+    /* Bersihkan register kerja Goertzel */
+    clr  r2
+    clr  r3
+    clr  r4
+    clr  r5
+    clr  r6
+    clr  r7
+    clr  r8
+    clr  r9
+    clr  r10
+    clr  r11
 
-    /* SRAM init */
+    /* Atur state machine ke mode awal */
     ldi  r16, FSM_IDLE
     sts  fsm_state,  r16
     clr  r16
@@ -129,24 +106,22 @@ main:
     sts  urx_state,  r16
     sts  urx_tmp,    r16
 
-    sei
+    sei                        /* Izinkan sistem menerima interupsi */
 
-/* ── Poll loop ─────────────────────────────────────────────────────────────── */
+/* --- Loop Pemrosesan Polling --- */
 main_loop:
     lds  r16, sample_ready
     tst  r16
-    breq main_loop
+    breq main_loop             /* Tahan di sini hingga ADC selesai mengambil sampel */
 
     clr  r16
     sts  sample_ready, r16
 
-    /* r24 = signed sample: ADCH - 128 */
     lds  r24, adc_raw
-    subi r24, 128
-    /* sign-extend into r25 for 16-bit add/sub operations */
+    subi r24, 128              /* Menggeser referensi amplitudo gelombang ADC ke titik tengah */
     clr  r25
     sbrc r24, 7
-    ldi  r25, 0xFF   /* r25 = 0xFF if sample negative, 0x00 if positive */
+    ldi  r25, 255              /* Operasi Sign-extension untuk bilangan negatif */
 
     rcall gi800
     rcall gi1500
@@ -154,14 +129,14 @@ main_loop:
     inc  r2
     mov  r16, r2
     cpi  r16, N_SAMPLES
-    brne main_loop
+    brne main_loop             /* Kembali ke atas jika belum mencapai 100 sampel */
 
-    /* Window done */
+    /* Evaluasi hasil sampel (Window selesai) */
     clr  r2
 
     rcall e800
     rcall threshold
-    mov  r17, r16    /* r17 = active_800 */
+    mov  r17, r16              /* r17 menyimpan hasil deteksi aktif 800 Hz */
 
     clr  r4
     clr  r5
@@ -169,35 +144,20 @@ main_loop:
     clr  r7
 
     rcall e1500
-    rcall threshold  /* r16 = active_1500 */
+    rcall threshold            /* r16 menyimpan hasil deteksi aktif 1500 Hz */
 
     clr  r8
     clr  r9
     clr  r10
     clr  r11
 
-    rcall fsm        /* r17=active_800, r16=active_1500 */
+    rcall fsm                  /* Periksa kecocokan pola bunyi sirene dengan State Machine */
 
     rjmp main_loop
 
-
-/* ══════════════════════════════════════════════════════════════════════════════
-   gi800 — Goertzel iteration, 800 Hz
-   State: r4:r5=Q1, r6:r7=Q2  (lo:hi, signed 16-bit)
-   Input: r24:r25 = signed 16-bit sample (prepared in main_loop above)
-   Q0 = (COEFF*Q1 >> 14) - Q2 + sample;  Q2=Q1; Q1=Q0
-   ══════════════════════════════════════════════════════════════════════════════
-   16x16 signed multiply strategy:
-     COEFF is always positive (fits in 15 bits), Q1 can be negative.
-     1. Take |Q1|
-     2. Unsigned 16x16 multiply: COEFF * |Q1| → 32-bit
-     3. If Q1 was negative, negate the 32-bit result
-     4. Arithmetic right-shift 14 → 16-bit term
-     5. term - Q2 + sample
-*/
+/* --- Eksekusi Algoritma Goertzel untuk Frekuensi 800 Hz --- */
 gi800:
-    /* |Q1_800| into r20:r21 */
-    movw r20, r4        /* r21:r20 = Q1 lo:hi */
+    movw r20, r4
     sbrs r21, 7
     rjmp gi800_abs_ok
     clr  r22
@@ -207,31 +167,28 @@ gi800:
     movw r20, r22
 gi800_abs_ok:
 
-    /* Load coeff r22:r23 */
     ldi  r22, lo8(COEFF_800)
     ldi  r23, hi8(COEFF_800)
 
-    /* 16x16 unsigned multiply → r19:r18:r17:r16 */
-    mul  r22, r20      /* Clo * Qlo */
+    mul  r22, r20
     movw r16, r0
     clr  r18
     clr  r19
 
-    mul  r22, r21      /* Clo * Qhi → add at offset+8 */
-    add  r17, r0
-    adc  r18, r1
-    adc  r19, r25      /* r25=0 here (set in main_loop but safe) */
-
-    mul  r23, r20      /* Chi * Qlo → add at offset+8 */
+    mul  r22, r21
     add  r17, r0
     adc  r18, r1
     adc  r19, r25
 
-    mul  r23, r21      /* Chi * Qhi → add at offset+16 */
+    mul  r23, r20
+    add  r17, r0
+    adc  r18, r1
+    adc  r19, r25
+
+    mul  r23, r21
     add  r18, r0
     adc  r19, r1
 
-    /* Negate if Q1 was negative */
     sbrs r5, 7
     rjmp gi800_sign_ok
     clr  r20
@@ -246,7 +203,6 @@ gi800_abs_ok:
     movw r18, r22
 gi800_sign_ok:
 
-    /* >> 14: result_lo = (r17>>6)|(r18<<2), result_hi = (r18>>6)|(r19<<2) */
     mov  r20, r17
     lsr  r20
     lsr  r20
@@ -257,7 +213,7 @@ gi800_sign_ok:
     mov  r22, r18
     lsl  r22
     lsl  r22
-    or   r20, r22      /* term lo */
+    or   r20, r22
 
     mov  r21, r18
     lsr  r21
@@ -269,27 +225,20 @@ gi800_sign_ok:
     mov  r22, r19
     lsl  r22
     lsl  r22
-    or   r21, r22      /* term hi */
+    or   r21, r22
 
-    /* Q0 = term - Q2 + sample (r24:r25 already sign-extended) */
     sub  r20, r6
     sbc  r21, r7
     add  r20, r24
     adc  r21, r25
 
-    /* Q2=Q1, Q1=Q0 */
     movw r6, r4
     movw r4, r20
 
     clr  r1
     ret
 
-
-/* ══════════════════════════════════════════════════════════════════════════════
-   gi1500 — Goertzel iteration, 1500 Hz
-   State: r8:r9=Q1, r10:r11=Q2
-   Same algorithm as gi800 with COEFF_1500
-*/
+/* --- Eksekusi Algoritma Goertzel untuk Frekuensi 1500 Hz --- */
 gi1500:
     movw r20, r8
     sbrs r21, 7
@@ -372,36 +321,28 @@ gi1500_sign_ok:
     clr  r1
     ret
 
-
-/* ══════════════════════════════════════════════════════════════════════════════
-   sq16 — 16-bit unsigned square
-   Input : r17:r16  (lo:hi)
-   Output: r23:r22:r21:r20  (32-bit)
-*/
+/* --- Subrutin Utilitas Pemangkatan (Kuadrat 16-bit) --- */
 sq16:
-    mul  r16, r16      /* lo*lo */
+    mul  r16, r16
     movw r20, r0
     clr  r22
     clr  r23
 
-    mul  r16, r17      /* lo*hi (add twice for symmetric cross term) */
+    mul  r16, r17
     add  r21, r0
     adc  r22, r1
     add  r21, r0
     adc  r22, r1
-    adc  r23, r25      /* r25=0 always */
+    adc  r23, r25
 
-    mul  r17, r17      /* hi*hi */
+    mul  r17, r17
     add  r22, r0
     adc  r23, r1
 
     clr  r1
     ret
 
-
-/* ══════════════════════════════════════════════════════════════════════════════
-   abs16i — absolute value of r17:r16, result in r17:r16
-*/
+/* --- Subrutin Pengubahan ke Nilai Mutlak --- */
 abs16i:
     sbrs r17, 7
     ret
@@ -412,28 +353,24 @@ abs16i:
     movw r16, r18
     ret
 
-
-/* ══════════════════════════════════════════════════════════════════════════════
-   e800 — energy for 800 Hz bin  ≈ Q1²+Q2²
-   Output: r23:r22:r21:r20
-*/
+/* --- Kalkulasi Spektrum Energi (800 Hz) --- */
 e800:
-    movw r16, r4       /* Q1_800 */
+    movw r16, r4
     rcall abs16i
-    rcall sq16         /* r23:r22:r21:r20 = Q1² */
+    rcall sq16
     push r20
     push r21
     push r22
     push r23
 
-    movw r16, r6       /* Q2_800 */
+    movw r16, r6
     rcall abs16i
-    rcall sq16         /* r23:r22:r21:r20 = Q2² */
+    rcall sq16
 
     pop  r19
     pop  r18
     pop  r17
-    pop  r16           /* r19:r18:r17:r16 = Q1² */
+    pop  r16
 
     add  r20, r16
     adc  r21, r17
@@ -441,10 +378,7 @@ e800:
     adc  r23, r19
     ret
 
-
-/* ══════════════════════════════════════════════════════════════════════════════
-   e1500 — energy for 1500 Hz bin
-*/
+/* --- Kalkulasi Spektrum Energi (1500 Hz) --- */
 e1500:
     movw r16, r8
     rcall abs16i
@@ -469,12 +403,7 @@ e1500:
     adc  r23, r19
     ret
 
-
-/* ══════════════════════════════════════════════════════════════════════════════
-   threshold — compare 32-bit energy vs threshold
-   Input : r23:r22:r21:r20
-   Output: r16 = 1 if ≥ threshold, 0 otherwise
-*/
+/* --- Pembanding Energi Terhadap Ambang Batas --- */
 threshold:
     ldi  r16, lo8(ENERGY_THRESH_LO)
     ldi  r17, hi8(ENERGY_THRESH_LO)
@@ -491,19 +420,13 @@ thr_below:
     clr  r16
     ret
 
-
-/* ══════════════════════════════════════════════════════════════════════════════
-   fsm — siren pattern state machine
-   Input : r17=active_800, r16=active_1500
-   SRAM  : fsm_state, alt_count, win_in_tone, silence_cnt
-*/
+/* --- Mesin Logika Pembaca Pola Suara Ambulans --- */
 fsm:
-    /* Determine dominant: 1=800Hz only, 2=1500Hz only, 0=none/both */
     clr  r18
     tst  r17
     breq fsm_check1500
     tst  r16
-    brne fsm_no_dominant   /* both active = noise */
+    brne fsm_no_dominant       /* Suara dianggap bising/noise jika kedua frekuensi aktif bersamaan */
     ldi  r18, 1
     rjmp fsm_dispatch
 fsm_check1500:
@@ -519,7 +442,6 @@ fsm_dispatch:
     brne  .+2
     rjmp  fsm_silence
 
-    /* Tone active: reset silence counter */
     clr  r19
     sts  silence_cnt, r19
 
@@ -530,11 +452,10 @@ fsm_dispatch:
     breq fsm_tone_a
     cpi  r16, FSM_TONE_B
     breq fsm_tone_b
-    /* FSM_CONFIRMED: stay until silence resets */
     rjmp fsm_done
 
 fsm_idle:
-    sts  fsm_state,   r18   /* latch first tone */
+    sts  fsm_state,   r18
     clr  r19
     sts  win_in_tone, r19
     sts  alt_count,   r19
@@ -546,7 +467,6 @@ fsm_tone_a:
     sts  win_in_tone, r19
     cpi  r18, 1
     breq fsm_a_staying
-    /* switched to 1500 Hz — check timing */
     cpi  r19, (WINDOWS_PER_TONE - TONE_MARGIN)
     brlo fsm_bad
     cpi  r19, (WINDOWS_PER_TONE + TONE_MARGIN + 1)
@@ -601,7 +521,6 @@ fsm_silence:
     rjmp fsm_done
 
 fsm_bad:
-    /* bad timing: restart with current tone */
     sts  fsm_state,   r18
     clr  r19
     sts  win_in_tone, r19
@@ -615,52 +534,43 @@ fsm_reset:
     sts  alt_count,   r19
     sts  win_in_tone, r19
     sts  silence_cnt, r19
-    cbi  _SFR_IO_ADDR(PORTD), INT_PIN
+    cbi  PORTD, INT_PIN
     rjmp fsm_done
 
 fsm_trigger:
     ldi  r19, FSM_CONFIRMED
     sts  fsm_state, r19
-    /* Pulse PD2 HIGH for ~10ms */
-    sbi  _SFR_IO_ADDR(PORTD), INT_PIN
+    sbi  PORTD, INT_PIN        /* Mengirimkan pulsa tegangan interupsi ke Master */
     ldi  r24, lo8(40000)
     ldi  r25, hi8(40000)
 fsm_pulse:
     sbiw r24, 1
     brne fsm_pulse
-    cbi  _SFR_IO_ADDR(PORTD), INT_PIN
-    /* Restore r25=0 for sign-extension in main_loop */
+    cbi  PORTD, INT_PIN
     clr  r25
     rcall uart_siren
 
 fsm_done:
     ret
 
-
-/* ══════════════════════════════════════════════════════════════════════════════
-   isr_t0 — Timer0 COMPA, fires at 8000 Hz
-*/
+/* --- Rutin Interupsi (Timer0): Sampling ADC 8000 Hz --- */
 isr_t0:
     push r16
-    in   r16, _SFR_IO_ADDR(SREG)
+    in   r16, SREG
     push r16
-    lds  r16, ADCH
+    lds  r16, ADCH             /* Segera ambil hasil ADC terbaru tanpa menunggu loop utama */
     sts  adc_raw, r16
     ldi  r16, 1
     sts  sample_ready, r16
     pop  r16
-    out  _SFR_IO_ADDR(SREG), r16
+    out  SREG, r16
     pop  r16
     reti
 
-
-/* ══════════════════════════════════════════════════════════════════════════════
-   isr_rx — USART RX, 3-byte config command from master
-   0xA1 [lo] [hi] → (threshold update placeholder)
-*/
+/* --- Rutin Interupsi (UART): Menerima Data --- */
 isr_rx:
     push r16
-    in   r16, _SFR_IO_ADDR(SREG)
+    in   r16, SREG
     push r16
     push r17
 
@@ -670,12 +580,11 @@ isr_rx:
     breq urx_idle
     cpi  r17, 1
     breq urx_got_lo
-    /* state=2: complete */
     clr  r17
     sts  urx_state, r17
     rjmp urx_done
 urx_idle:
-    cpi  r16, 0xA1
+    cpi  r16, 161              /* Membaca byte awal (Ekuivalen dengan 0xA1) */
     brne urx_done
     ldi  r17, 1
     sts  urx_state, r17
@@ -687,27 +596,24 @@ urx_got_lo:
 urx_done:
     pop  r17
     pop  r16
-    out  _SFR_IO_ADDR(SREG), r16
+    out  SREG, r16
     pop  r16
     reti
 
-
-/* ══════════════════════════════════════════════════════════════════════════════
-   uart_siren — blocking transmit "SIREN\r\n"
-*/
+/* --- Subrutin Kirim Pesan Sirene via UART --- */
 uart_siren:
     push r16
     push r17
     push r30
     push r31
-    ldi  r30, lo8(pm(siren_msg))
-    ldi  r31, hi8(pm(siren_msg))
+    ldi  r30, lo8(siren_msg)
+    ldi  r31, hi8(siren_msg)
     ldi  r17, 7
 us_loop:
     lpm  r16, Z+
 us_wait:
     lds  r18, UCSR0A
-    sbrs r18, UDRE0
+    sbrs r18, 5                /* Pastikan buffer transmisi (UDRE0) siap menampung data */
     rjmp us_wait
     sts  UDR0, r16
     dec  r17

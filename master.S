@@ -1,12 +1,13 @@
 #define __SFR_OFFSET 0x00
 #include <avr/io.h>
 
+/* --- Konstanta Sistem (Format Desimal) --- */
 #define GREEN_TIME 3
 #define YELLOW_TIME 1
-#define HOUR_SWITCH_MODE 0x19
-#define HOUR_WAKE 0x00
-#define YEL_D_MASK ((1<<4)|(1<<7))
-#define YEL_B_MASK (1<<2)
+#define HOUR_SWITCH_MODE 0x19    /* (Jam 19:00) */
+#define HOUR_WAKE 0
+#define YEL_D_MASK 0b10010000  /* Mask untuk PD4 dan PD7 */
+#define YEL_B_MASK 0b00000100  /* Mask untuk PB2 */
 
 .global main
 .global INT0_vect
@@ -16,468 +17,499 @@ siren_flag: .byte 1
 last_switch: .byte 1
 
 .section .text
+/* --- Vector Table Interupsi --- */
 .org 0x0000
     rjmp main
 .org 0x0002
     rjmp isr_int0
+
+/* --- Inisialisasi Sistem --- */
 main:
-    RCALL twi_init
-    RCALL uart_init
-    LDI R16, 0b11111100
-    OUT DDRD, R16
-    LDI R16, 0b00001111
-    OUT DDRB, R16
-    IN R16, DDRC
-    ANDI R16, ~(1<<0)
-    OUT DDRC, R16
-    IN R16, PORTC
-    ORI R16, (1<<0)
-    OUT PORTC, R16
-    LDI R20, (1<<WGM01)
-    OUT TCCR0A, R20
+    rcall twi_init
+    rcall uart_init
+    
+    ldi r16, 0b11111100        /* Set PD2-PD7 sebagai output */
+    out DDRD, r16
+    ldi r16, 0b00001111        /* Set PB0-PB3 sebagai output */
+    out DDRB, r16
+    
+    in r16, DDRC
+    andi r16, 0b11111110       /* Set PC0 sebagai input */
+    out DDRC, r16
+    in r16, PORTC
+    ori r16, 0b00000001        /* Aktifkan pull-up PC0 */
+    out PORTC, r16
+    
+    ldi r16, 0b00000010        /* Timer0 Mode CTC */
+    out TCCR0A, r16
 
-    LDI R16, (1<<ISC01) | (1<<ISC00)
-    STS EICRA, R16
-    LDI R16, (1<<INT0)
-    OUT EIMSK, R16
-    CLR R16
-    STS siren_flag, R16
-    SEI
+    ldi r16, 0b00000011        /* Trigger INT0 pada Rising Edge */
+    sts EICRA, r16
+    ldi r16, 0b00000001        /* Aktifkan External Interrupt 0 */
+    out EIMSK, r16
+    clr r16
+    sts siren_flag, r16
+    sei                        /* Aktifkan interupsi global */
 
+/* --- Loop Utama: Pengatur Prioritas --- */
 intersection_loop:
-    LDS R16, siren_flag
-    CPI R16, 1
-    BRNE skip_siren
-    RJMP do_siren_mode
+    rcall log_time
+    lds r16, siren_flag
+    cpi r16, 1
+    brne skip_siren
+    rjmp do_siren_mode         /* Prioritas 1: Sirene Ambulans */
 skip_siren:
 
-    RCALL log_time
-    RCALL read_rtc
-    MOV R16, R22
-    ANDI R16, 0x3F
-    RCALL check_night_hour
+    rcall read_rtc
+    mov r16, r22
+    andi r16, 63               /* Masking bit jam (0x3F = 63) */
+    rcall check_night_hour
     
-    IN R16, PINC
-    ANDI R16, 1
-    STS last_switch, R16
+    in r16, PINC
+    andi r16, 1
+    sts last_switch, r16       /* Simpan status saklar terakhir */
     
-    CLR R18
-    SBRS R16, 0
-    LDI R18, 1
+    clr r18
+    sbrs r16, 0
+    ldi r18, 1
     
-    EOR R17, R18
-    TST R17
-    BRNE execute_yellow
-    RJMP normal_cycle
+    eor r17, r18               /* Logika XOR untuk toggle mode malam/normal */
+    tst r17
+    brne execute_yellow        /* Prioritas 2/3: Mode Kuning Berkedip */
+    rjmp normal_cycle          /* Prioritas 4: Siklus Normal */
 
+/* --- Subrutin Mode Darurat Sirene --- */
+do_siren_mode:
+    ldi r16, 0b01001000        /* Semua merah (PD3, PD6) */
+    out PORTD, r16
+    ldi r16, 0b00000010        /* Merah Timur (PB1) */
+    out PORTB, r16
+    ldi r20, 50
+siren_wait:
+    rcall delay_100ms
+    dec r20
+    brne siren_wait
+    clr r16
+    sts siren_flag, r16
+    rjmp intersection_loop
+
+/* --- Mode Kuning Berkedip --- */
 execute_yellow:
-    LDI R16, YEL_D_MASK
-    OUT PORTD, R16
-    LDI R16, YEL_B_MASK
-    OUT PORTB, R16
-    RCALL delay_500ms
-    TST R25
-    BRNE intersection_loop
-    CLR R16
-    OUT PORTD, R16
-    OUT PORTB, R16
-    RCALL delay_500ms
-    TST R25
-    BRNE intersection_loop
-    RJMP intersection_loop
+    ldi r16, YEL_D_MASK
+    out PORTD, r16
+    ldi r16, YEL_B_MASK
+    out PORTB, r16
+    rcall delay_500ms
+    tst r25
+    brne intersection_loop
+    clr r16
+    out PORTD, r16
+    out PORTB, r16
+    rcall delay_500ms
+    tst r25
+    brne intersection_loop
+    rjmp intersection_loop
 
+/* --- Siklus Normal Lampu Pertigaan --- */
 normal_cycle:
-    LDI R30, lo8(str_utara_siap)
-    LDI R31, hi8(str_utara_siap)
-    RCALL print_str_pm
-    LDI R16, (1<<4)|(1<<6)
-    OUT PORTD, R16
-    LDI R16, (1<<1)
-    OUT PORTB, R16
-    LDI R18, YELLOW_TIME
-    RCALL delay_seconds
-    TST R25
-    BREQ skip_abort_1
-    RJMP intersection_loop
+    /* Utara Persiapan */
+    ldi r30, lo8(str_utara_siap)
+    ldi r31, hi8(str_utara_siap)
+    rcall print_str_pm
+    ldi r16, 0b01010000
+    out PORTD, r16
+    ldi r16, 0b00000010
+    out PORTB, r16
+    ldi r18, YELLOW_TIME
+    rcall delay_seconds
+    tst r25
+    breq skip_abort_1
+    rjmp intersection_loop
 skip_abort_1:
 
-    LDI R30, lo8(str_utara_hijau)
-    LDI R31, hi8(str_utara_hijau)
-    RCALL print_str_pm
-    LDI R16, (1<<5)|(1<<6)
-    OUT PORTD, R16
-    LDI R16, (1<<1)
-    OUT PORTB, R16
-    LDI R23, GREEN_TIME
-    RCALL print_countdown
-    TST R25
-    BREQ skip_abort_2
-    RJMP intersection_loop
+    /* Utara Hijau */
+    ldi r30, lo8(str_utara_hijau)
+    ldi r31, hi8(str_utara_hijau)
+    rcall print_str_pm
+    ldi r16, 0b01100000
+    out PORTD, r16
+    ldi r16, 0b00000010
+    out PORTB, r16
+    ldi r23, GREEN_TIME
+    rcall print_countdown
+    tst r25
+    breq skip_abort_2
+    rjmp intersection_loop
 skip_abort_2:
 
-    LDI R30, lo8(str_utara_kuning)
-    LDI R31, hi8(str_utara_kuning)
-    RCALL print_str_pm
-    LDI R16, (1<<4)|(1<<6)
-    OUT PORTD, R16
-    LDI R16, (1<<1)
-    OUT PORTB, R16
-    LDI R18, YELLOW_TIME
-    RCALL delay_seconds
-    TST R25
-    BREQ skip_abort_3
-    RJMP intersection_loop
+    /* Utara Kuning */
+    ldi r30, lo8(str_utara_kuning)
+    ldi r31, hi8(str_utara_kuning)
+    rcall print_str_pm
+    ldi r16, 0b01010000
+    out PORTD, r16
+    ldi r16, 0b00000010
+    out PORTB, r16
+    ldi r18, YELLOW_TIME
+    rcall delay_seconds
+    tst r25
+    breq skip_abort_3
+    rjmp intersection_loop
 skip_abort_3:
 
-    LDI R30, lo8(str_selatan_siap)
-    LDI R31, hi8(str_selatan_siap)
-    RCALL print_str_pm
-    LDI R16, (1<<3)|(1<<7)
-    OUT PORTD, R16
-    LDI R16, (1<<1)
-    OUT PORTB, R16
-    LDI R18, YELLOW_TIME
-    RCALL delay_seconds
-    TST R25
-    BREQ skip_abort_4
-    RJMP intersection_loop
+    /* Selatan Persiapan */
+    ldi r30, lo8(str_selatan_siap)
+    ldi r31, hi8(str_selatan_siap)
+    rcall print_str_pm
+    ldi r16, 0b10001000
+    out PORTD, r16
+    ldi r16, 0b00000010
+    out PORTB, r16
+    ldi r18, YELLOW_TIME
+    rcall delay_seconds
+    tst r25
+    breq skip_abort_4
+    rjmp intersection_loop
 skip_abort_4:
 
-    LDI R30, lo8(str_selatan_hijau)
-    LDI R31, hi8(str_selatan_hijau)
-    RCALL print_str_pm
-    LDI R16, (1<<3)
-    OUT PORTD, R16
-    LDI R16, (1<<0)|(1<<1)
-    OUT PORTB, R16
-    LDI R23, GREEN_TIME
-    RCALL print_countdown
-    TST R25
-    BREQ skip_abort_5
-    RJMP intersection_loop
+    /* Selatan Hijau */
+    ldi r30, lo8(str_selatan_hijau)
+    ldi r31, hi8(str_selatan_hijau)
+    rcall print_str_pm
+    ldi r16, 0b01001000
+    out PORTD, r16
+    ldi r16, 0b00000011
+    out PORTB, r16
+    ldi r23, GREEN_TIME
+    rcall print_countdown
+    tst r25
+    breq skip_abort_5
+    rjmp intersection_loop
 skip_abort_5:
 
-    LDI R30, lo8(str_selatan_kuning)
-    LDI R31, hi8(str_selatan_kuning)
-    RCALL print_str_pm
-    LDI R16, (1<<3)|(1<<7)
-    OUT PORTD, R16
-    LDI R16, (1<<1)
-    OUT PORTB, R16
-    LDI R18, YELLOW_TIME
-    RCALL delay_seconds
-    TST R25
-    BREQ skip_abort_6
-    RJMP intersection_loop
+    /* Selatan Kuning */
+    ldi r30, lo8(str_selatan_kuning)
+    ldi r31, hi8(str_selatan_kuning)
+    rcall print_str_pm
+    ldi r16, 0b10001000
+    out PORTD, r16
+    ldi r16, 0b00000010
+    out PORTB, r16
+    ldi r18, YELLOW_TIME
+    rcall delay_seconds
+    tst r25
+    breq skip_abort_6
+    rjmp intersection_loop
 skip_abort_6:
 
-    LDI R30, lo8(str_timur_siap)
-    LDI R31, hi8(str_timur_siap)
-    RCALL print_str_pm
-    LDI R16, (1<<3)|(1<<6)
-    OUT PORTD, R16
-    LDI R16, (1<<2)
-    OUT PORTB, R16
-    LDI R18, YELLOW_TIME
-    RCALL delay_seconds
-    TST R25
-    BREQ skip_abort_7
-    RJMP intersection_loop
+    /* Timur Persiapan */
+    ldi r30, lo8(str_timur_siap)
+    ldi r31, hi8(str_timur_siap)
+    rcall print_str_pm
+    ldi r16, 0b01001000
+    out PORTD, r16
+    ldi r16, 0b00000100
+    out PORTB, r16
+    ldi r18, YELLOW_TIME
+    rcall delay_seconds
+    tst r25
+    breq skip_abort_7
+    rjmp intersection_loop
 skip_abort_7:
 
-    LDI R30, lo8(str_timur_hijau)
-    LDI R31, hi8(str_timur_hijau)
-    RCALL print_str_pm
-    LDI R16, (1<<3)|(1<<6)
-    OUT PORTD, R16
-    LDI R16, (1<<3)
-    OUT PORTB, R16
-    LDI R23, GREEN_TIME
-    RCALL print_countdown
-    TST R25
-    BREQ skip_abort_8
-    RJMP intersection_loop
+    /* Timur Hijau */
+    ldi r30, lo8(str_timur_hijau)
+    ldi r31, hi8(str_timur_hijau)
+    rcall print_str_pm
+    ldi r16, 0b01001000
+    out PORTD, r16
+    ldi r16, 0b00001000
+    out PORTB, r16
+    ldi r23, GREEN_TIME
+    rcall print_countdown
+    tst r25
+    breq skip_abort_8
+    rjmp intersection_loop
 skip_abort_8:
 
-    LDI R30, lo8(str_timur_kuning)
-    LDI R31, hi8(str_timur_kuning)
-    RCALL print_str_pm
-    LDI R16, (1<<3)|(1<<6)
-    OUT PORTD, R16
-    LDI R16, (1<<2)
-    OUT PORTB, R16
-    LDI R18, YELLOW_TIME
-    RCALL delay_seconds
-    TST R25
-    BREQ skip_abort_9
-    RJMP intersection_loop
+    /* Timur Kuning */
+    ldi r30, lo8(str_timur_kuning)
+    ldi r31, hi8(str_timur_kuning)
+    rcall print_str_pm
+    ldi r16, 0b01001000
+    out PORTD, r16
+    ldi r16, 0b00000100
+    out PORTB, r16
+    ldi r18, YELLOW_TIME
+    rcall delay_seconds
+    tst r25
+    breq skip_abort_9
+    rjmp intersection_loop
 skip_abort_9:
 
-    RJMP intersection_loop
+    rjmp intersection_loop
 
+/* --- Fungsi Deteksi Perubahan Saklar --- */
 check_abort_normal:
-    CLR R25
-    IN R16, PINC
-    ANDI R16, 1
-    LDS R17, last_switch
-    CP R16, R17
-    BREQ can_done
-    LDI R25, 1
+    clr r25
+    in r16, PINC
+    andi r16, 1
+    lds r17, last_switch
+    cp r16, r17
+    breq can_done
+    ldi r25, 1                 /* Set flag abort jika saklar berubah */
 can_done:
-    RET
+    ret
 
+/* --- Fungsi Cek Jam Malam --- */
 check_night_hour:
-    CPI R16, HOUR_SWITCH_MODE
-    BRSH cnh_night
-    CPI R16, HOUR_WAKE
-    BRLO cnh_night
-    CLR R17
-    RET
+    cpi r16, HOUR_SWITCH_MODE
+    brsh cnh_night
+    cpi r16, HOUR_WAKE
+    brlo cnh_night
+    clr r17
+    ret
 cnh_night:
-    LDI R17, 1
-    RET
+    ldi r17, 1
+    ret
 
+/* --- Fungsi Delay 500ms --- */
 delay_500ms:
-    CLR R25
-    LDI R19, 50
-    LDI R16, 155
-    OUT OCR0A, R16
-    LDI R16, (1<<CS02)|(1<<CS00)
-    OUT TCCR0B, R16
+    clr r25
+    ldi r19, 50
+    ldi r16, 155
+    out OCR0A, r16
+    ldi r16, 0b00000101        /* Prescaler 1024 */
+    out TCCR0B, r16
 d500_loop:
-    CLR R16
-    OUT TCNT0, R16
-    LDI R16, (1<<OCF0A)
-    OUT TIFR0, R16
+    clr r16
+    out TCNT0, r16
+    ldi r16, 0b00000010        /* Clear OCF0A flag */
+    out TIFR0, r16
 d500_wait:
-    RCALL check_abort_normal
-    TST R25
-    BRNE d500_abort
-    IN R16, TIFR0
-    SBRS R16, OCF0A
-    RJMP d500_wait
-    DEC R19
-    BRNE d500_loop
+    rcall check_abort_normal
+    tst r25
+    brne d500_abort
+    in r16, TIFR0
+    sbrs r16, 1
+    rjmp d500_wait
+    dec r19
+    brne d500_loop
 d500_abort:
-    CLR R16
-    OUT TCCR0B, R16
-    RET
+    clr r16
+    out TCCR0B, r16
+    ret
 
+/* --- Fungsi Delay Detik --- */
 delay_seconds:
-    CLR R25
-    TST R18
-    BREQ delay_done
-    LDI R19, 100
-    LDI R16, 155
-    OUT OCR0A, R16
-    LDI R16, (1<<CS02)|(1<<CS00)
-    OUT TCCR0B, R16
+    clr r25
+    tst r18
+    breq delay_done
+    ldi r19, 100               /* 100 * 10ms = 1 detik */
+    ldi r16, 155
+    out OCR0A, r16
+    ldi r16, 0b00000101
+    out TCCR0B, r16
 loop_10ms:
-    CLR R16
-    OUT TCNT0, R16
-    LDI R16, (1<<OCF0A)
-    OUT TIFR0, R16
+    clr r16
+    out TCNT0, r16
+    ldi r16, 0b00000010
+    out TIFR0, r16
 wait_flag:
-    RCALL check_abort_normal
-    TST R25
-    BRNE delay_abort
-    IN R16, TIFR0
-    SBRS R16, OCF0A
-    RJMP wait_flag
-    DEC R19
-    BRNE loop_10ms
-    DEC R18
-    RJMP delay_seconds
+    rcall check_abort_normal
+    tst r25
+    brne delay_abort
+    in r16, TIFR0
+    sbrs r16, 1
+    rjmp wait_flag
+    dec r19
+    brne loop_10ms
+    dec r18
+    rjmp delay_seconds
 delay_abort:
 delay_done:
-    CLR R16
-    OUT TCCR0B, R16
-    RET
+    clr r16
+    out TCCR0B, r16
+    ret
 
+/* --- Fungsi Delay 100ms --- */
 delay_100ms:
-    LDI R21, 100
-d1: LDI R22, 200
-d2: LDI R23, 20
-d3: DEC R23
-    BRNE d3
-    DEC R22
-    BRNE d2
-    DEC R21
-    BRNE d1
-    RET
+    ldi r21, 100
+d1: ldi r22, 200
+d2: ldi r23, 20
+d3: dec r23
+    brne d3
+    dec r22
+    brne d2
+    dec r21
+    brne d1
+    ret
 
+/* --- Fungsi Cetak String Flash --- */
 print_str_pm:
-    LPM R16, Z+
-    TST R16
-    BREQ psp_done
-    RCALL uart_tx
-    RJMP print_str_pm
+    lpm r16, Z+
+    tst r16
+    breq psp_done
+    rcall uart_tx
+    rjmp print_str_pm
 psp_done:
-    RET
+    ret
 
+/* --- Fungsi Hitung Mundur Serial --- */
 print_countdown:
 pcd_loop:
-    TST R23
-    BREQ pcd_done
-    MOV R16, R23
-    ORI R16, 0x30
-    RCALL uart_tx
-    LDI R16, ' '
-    RCALL uart_tx
-    PUSH R23
-    LDI R18, 1
-    RCALL delay_seconds
-    POP R23
-    TST R25
-    BRNE pcd_done
-    DEC R23
-    RJMP pcd_loop
+    tst r23
+    breq pcd_done
+    mov r16, r23
+    ori r16, 48                /* Konversi ke ASCII ('0' = 48) */
+    rcall uart_tx
+    ldi r16, 32                /* Karakter spasi (ASCII 32) */
+    rcall uart_tx
+    push r23
+    ldi r18, 1
+    rcall delay_seconds
+    pop r23
+    tst r25
+    brne pcd_done
+    dec r23
+    rjmp pcd_loop
 pcd_done:
-    RET
+    ret
 
+/* --- Konfigurasi TWI/I2C --- */
 twi_init:
-    LDI R16, 0x48
-    STS TWBR, R16
-    CLR R16
-    STS TWSR, R16
-    RET
+    ldi r16, 72                /* Kecepatan 100kHz pada 16MHz */
+    sts TWBR, r16
+    clr r16
+    sts TWSR, r16
+    ret
 
 twi_start:
-    LDI R16, (1<<TWINT)|(1<<TWSTA)|(1<<TWEN)
-    STS TWCR, R16
+    ldi r16, 0b10100100        /* TWINT, TWSTA, TWEN */
+    sts TWCR, r16
 wait_start:
-    LDS R16, TWCR
-    SBRS R16, TWINT
-    RJMP wait_start
-    RET
+    lds r16, TWCR
+    sbrs r16, 7
+    rjmp wait_start
+    ret
 
 twi_stop:
-    LDI R16, (1<<TWINT)|(1<<TWSTO)|(1<<TWEN)
-    STS TWCR, R16
-    RET
+    ldi r16, 0b10010100        /* TWINT, TWSTO, TWEN */
+    sts TWCR, r16
+    ret
 
 twi_write:
-    STS TWDR, R18
-    LDI R16, (1<<TWINT)|(1<<TWEN)
-    STS TWCR, R16
+    sts TWDR, r18
+    ldi r16, 0b10000100        /* TWINT, TWEN */
+    sts TWCR, r16
 wait_write:
-    LDS R16, TWCR
-    SBRS R16, TWINT
-    RJMP wait_write
-    RET
+    lds r16, TWCR
+    sbrs r16, 7
+    rjmp wait_write
+    ret
 
 twi_read_ack:
-    LDI R16, (1<<TWINT)|(1<<TWEN)|(1<<TWEA)
-    STS TWCR, R16
+    ldi r16, 0b11000100        /* TWINT, TWEN, TWEA */
+    sts TWCR, r16
 wait_read_ack:
-    LDS R16, TWCR
-    SBRS R16, TWINT
-    RJMP wait_read_ack
-    LDS R18, TWDR
-    RET
+    lds r16, TWCR
+    sbrs r16, 7
+    rjmp wait_read_ack
+    lds r18, TWDR
+    ret
 
 twi_read_nack:
-    LDI R16, (1<<TWINT)|(1<<TWEN)
-    STS TWCR, R16
+    ldi r16, 0b10000100        /* TWINT, TWEN */
+    sts TWCR, r16
 wait_read_nack:
-    LDS R16, TWCR
-    SBRS R16, TWINT
-    RJMP wait_read_nack
-    LDS R18, TWDR
-    RET
+    lds r16, TWCR
+    sbrs r16, 7
+    rjmp wait_read_nack
+    lds r18, TWDR
+    ret
 
+/* --- Baca Data Waktu RTC --- */
 read_rtc:
-    RCALL twi_start
-    LDI R18, 0xD0
-    RCALL twi_write
-    LDI R18, 0x00
-    RCALL twi_write
-    RCALL twi_start
-    LDI R18, 0xD1
-    RCALL twi_write
-    RCALL twi_read_ack
-    MOV R20, R18
-    RCALL twi_read_ack
-    MOV R21, R18
-    RCALL twi_read_nack
-    MOV R22, R18
-    RCALL twi_stop
-    RET
+    rcall twi_start
+    ldi r18, 208               /* Alamat tulis DS3231 (0xD0) */
+    rcall twi_write
+    ldi r18, 0
+    rcall twi_write
+    rcall twi_start
+    ldi r18, 209               /* Alamat baca DS3231 (0xD1) */
+    rcall twi_write
+    rcall twi_read_ack
+    mov r20, r18               /* Detik */
+    rcall twi_read_ack
+    mov r21, r18               /* Menit */
+    rcall twi_read_nack
+    mov r22, r18               /* Jam */
+    rcall twi_stop
+    ret
 
+/* --- Konfigurasi UART --- */
 uart_init:
-    LDI R16, 0
-    STS UBRR0H, R16
-    LDI R16, 103
-    STS UBRR0L, R16
-    LDI R16, (1<<TXEN0)
-    STS UCSR0B, R16
-    LDI R16, (1<<UCSZ01)|(1<<UCSZ00)
-    STS UCSR0C, R16
-    RET
+    ldi r16, 0
+    sts UBRR0H, r16
+    ldi r16, 103               /* 9600 Baud pada 16MHz */
+    sts UBRR0L, r16
+    ldi r16, 0b00001000        /* Aktifkan Transmitter (TXEN0) */
+    sts UCSR0B, r16
+    ldi r16, 0b00000110        /* 8-bit data, 1 stop bit */
+    sts UCSR0C, r16
+    ret
 
 uart_tx:
-    LDS R17, UCSR0A
-    SBRS R17, UDRE0
-    RJMP uart_tx
-    STS UDR0, R16
-    RET
+    lds r17, UCSR0A
+    sbrs r17, 5                /* Tunggu buffer UDR0 kosong (UDRE0) */
+    rjmp uart_tx
+    sts UDR0, r16
+    ret
 
 bcd_to_ascii_tx:
-    MOV R16, R18
-    SWAP R16
-    ANDI R16, 0x0F
-    ORI R16, 0x30
-    RCALL uart_tx
-    MOV R16, R18
-    ANDI R16, 0x0F
-    ORI R16, 0x30
-    RCALL uart_tx
-    RET
+    mov r16, r18
+    swap r16
+    andi r16, 15
+    ori r16, 48
+    rcall uart_tx
+    mov r16, r18
+    andi r16, 15
+    ori r16, 48
+    rcall uart_tx
+    ret
 
 log_time:
-    RCALL read_rtc
-    MOV R18, R22
-    ANDI R18, 0x3F
-    RCALL bcd_to_ascii_tx
-    LDI R16, ':'
-    RCALL uart_tx
-    MOV R18, R21
-    RCALL bcd_to_ascii_tx
-    LDI R16, ':'
-    RCALL uart_tx
-    MOV R18, R20
-    RCALL bcd_to_ascii_tx
-    LDI R16, '\r'
-    RCALL uart_tx
-    LDI R16, '\n'
-    RCALL uart_tx
-    RET
+    rcall read_rtc
+    mov r18, r22
+    andi r18, 63
+    rcall bcd_to_ascii_tx
+    ldi r16, 58                /* ':' ASCII */
+    rcall uart_tx
+    mov r18, r21
+    rcall bcd_to_ascii_tx
+    ldi r16, 58
+    rcall uart_tx
+    mov r18, r20
+    rcall bcd_to_ascii_tx
+    ldi r16, 13                /* Carriage Return */
+    rcall uart_tx
+    ldi r16, 10                /* Line Feed */
+    rcall uart_tx
+    ret
 
-do_siren_mode:
-    LDI R16, 0b01001000
-    OUT PORTD, R16
-    LDI R16, 0b00000010
-    OUT PORTB, R16
-    LDI R20, 50
-siren_wait:
-    RCALL delay_100ms
-    DEC R20
-    BRNE siren_wait
-    CLR R16
-    STS siren_flag, R16
-    RJMP intersection_loop
-
+/* --- Rutin Interupsi Eksternal INT0 --- */
 isr_int0:
-    PUSH R16
-    IN R16, SREG
-    PUSH R16
-    LDI R16, 1
-    STS siren_flag, R16
-    POP R16
-    OUT SREG, R16
-    POP R16
-    RETI
+    push r16
+    in r16, SREG
+    push r16
+    ldi r16, 1
+    sts siren_flag, r16
+    pop r16
+    out SREG, r16
+    pop r16
+    reti
 
+/* --- Data Teks di Flash Memory --- */
 str_utara_siap: .asciz "Utara: PERSIAPAN\r\n"
 str_utara_hijau: .asciz "Utara: HIJAU - "
 str_utara_kuning: .asciz "\r\nUtara: KUNING\r\n"
