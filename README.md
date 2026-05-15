@@ -1,11 +1,11 @@
 # Traffic Light System with Adjustable Modes and Ambulance Detection
 
-## Kelompok berapa gw lupa
+## Kelompok 3
 
-- ojan
-- rafif
-- danish alfa
-- salsabila
+- Fauzan Arfa Nofiantoro		2406411793
+- Danish Al Fayyadh Sunarta		2406416951
+- Salsabila Maharani Mumtaz	2406348156
+- Muhammad Rafif Batubara	2406436253
 
 ## Fitur
 
