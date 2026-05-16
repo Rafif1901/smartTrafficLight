@@ -3,7 +3,7 @@
 
 #define GREEN_TIME 3
 #define YELLOW_TIME 1
-#define HOUR_SWITCH_MODE 0x19
+#define HOUR_SWITCH_MODE 0x17
 #define HOUR_WAKE 0x00
 #define YEL_D_MASK ((1<<4)|(1<<7))
 #define YEL_B_MASK (1<<2)
@@ -56,15 +56,15 @@ skip_siren:
     MOV R16, R22
     ANDI R16, 0x3F
     RCALL check_night_hour
-    
+
     IN R16, PINC
     ANDI R16, 1
     STS last_switch, R16
-    
+
     CLR R18
     SBRS R16, 0
     LDI R18, 1
-    
+
     EOR R17, R18
     TST R17
     BRNE execute_yellow
