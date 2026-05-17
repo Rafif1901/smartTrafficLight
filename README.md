@@ -115,9 +115,9 @@ Jika Finite State Machine (FSM) mendeteksi transisi lonjakan energi yang memenuh
 
 | Parameter Pengujian | Gambar Rangkaian / Kondisi Fisik | Output Serial Monitor / UART |
 | :--- | :--- | :--- |
-| **Siklus Normal** |<img width="682" height="362" alt="Screenshot 2026-05-17 155840" src="https://github.com/user-attachments/assets/43993e45-8edb-40ef-8ef8-f0829779393a" />| `Utara: HIJAU - 3 ...` |
+| **Siklus Normal** |<img width="703" height="430" alt="Screenshot 2026-05-17 155618" src="https://github.com/user-attachments/assets/ae22e4ad-e6d2-4904-aeec-e67ffc23ba8c" />| `Utara: HIJAU - 3 ...` |
 | **Transisi Mode Malam (Standby)** |<img width="628" height="432" alt="Screenshot 2026-05-17 155815" src="https://github.com/user-attachments/assets/fd749e34-2457-4c5c-894f-5a14d7945935" />| `Input config: s19.00.00` |
-| **Deteksi Sirene Ambulans** |<img width="703" height="430" alt="Screenshot 2026-05-17 155618" src="https://github.com/user-attachments/assets/ae22e4ad-e6d2-4904-aeec-e67ffc23ba8c" />| `Siren detected - Interrupting master...` |
+| **Deteksi Sirene Ambulans** |<img width="682" height="362" alt="Screenshot 2026-05-17 155840" src="https://github.com/user-attachments/assets/43993e45-8edb-40ef-8ef8-f0829779393a" />| `Siren detected - Interrupting master...` |
 
 ### Performance Evaluation
 Sistem merespons instruksi perubahan mode secara *real-time* sesuai dengan data modul RTC. Pada modul Slave, algoritma pemrosesan DSP yang diimplementasikan melalui operasi *fixed-point* dalam Assembly terbukti dapat mengkalkulasi tingkat energi frekuensi setiap 12.5 milidetik tanpa mengalami *bottleneck*, memberikan sisa *headroom* siklus komputasi yang besar bagi mikrokontroler untuk melakukan interupsi dan operasi I/O UART. Tantangan teknis yang memerlukan perhatian lebih adalah pada aspek sensitivitas perangkat keras mikrofon dan kalibrasi nilai *threshold* (LO dan HI) untuk mencegah indikasi positif palsu (*false-positive*) akibat bising jalanan biasa yang terdeteksi masuk ke dalam frekuensi bin.
