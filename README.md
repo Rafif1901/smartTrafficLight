@@ -1,47 +1,129 @@
 # Traffic Light System with Adjustable Modes and Ambulance Detection
 
-## Kelompok 3
+## Anggota Kelompok
+- Fauzan Arfa Nofiantoro - 2406411793
+- Danish Al Fayyadh Sunarta - 2406416951
+- Salsabila Maharani Mumtaz - 2406348156
+- Muhammad Rafif Batubara - 2406436253
 
-- Fauzan Arfa Nofiantoro		2406411793
-- Danish Al Fayyadh Sunarta		2406416951
-- Salsabila Maharani Mumtaz	2406348156
-- Muhammad Rafif Batubara	2406436253
+## Table of Contents
+- [Introduction](#introduction)
+- [Hardware Design and Implementation Details](#hardware-design-and-implementation-details)
+- [Software Implementation Details](#software-implementation-details)
+- [Test Results and Performance Evaluation](#test-result-and-performance-evaluation)
+- [Conclusion and Future Work](#conclusion-and-future-work)
 
-## Fitur
+---
 
-- lampu merah pada umumnya
-- lampu kuning kelap kelip (mode mati, kaya di kelapa dua jam 7 malem keatas)
-- merahin semua jalur kalau ngedeteksi suara ambulans
-- deteksi ambulans dengan algoritma Goertzel (bentuk efisien dari discrete fourier transform untuk suatu titik frekuensi)
-- jam real-time
-- Toggle mode lampu di jam tertentu
+## Introduction
 
-## Batasan
+### Problem
+- Kemacetan lalu lintas sering kali menghambat laju kendaraan darurat seperti ambulans, yang dapat berakibat fatal bagi pasien.
+- Sistem lampu lalu lintas konvensional beroperasi dengan siklus statis yang tidak efisien pada malam hari.
+- Tidak adanya sistem prioritas otomatis di persimpangan jalan ketika ada kendaraan darurat yang mendekat.
 
-- Asumsi sirine ambulans bolak-balik di 800 dan 1500 Hz
-- Asumsi sirine ambulans fast yelp (indikasi bawa pasien darurat)
-- Mengabaikan efek doppler
-- Asumsi pengendara taat aturan semua
+### Solution
+- Sistem ini menggunakan arsitektur **Master-Slave** mikrokontroler ATmega328P yang diprogram menggunakan AVR Assembly.
+- **Arduino Master** bertugas mengendalikan siklus lampu lalu lintas tiga arah dan mengintegrasikan modul RTC untuk manajemen waktu operasional secara presisi.
+- **Arduino Slave** bertugas mendengarkan audio di sekitar persimpangan dan memprosesnya untuk mendeteksi keberadaan pola sirene ambulans tipe *fast yelp* menggunakan algoritma Digital Signal Processing (DSP).
+- Ketika sirene terdeteksi, Slave akan mengirimkan sinyal interupsi perangkat keras ke Master untuk mengamankan persimpangan secara instan.
 
-## Perhitungan Konstanta Goertzel
+### Main Features
+- **Siklus Lampu Lalu Lintas Normal**: Beroperasi mengatur laju kendaraan untuk persimpangan tiga arah (Utara, Selatan, Timur).
+- **Mode Malam (Standby)**: Lampu kuning berkedip (*flashing*) otomatis pada rentang jam tertentu (misal: 19.00 - 05.00) mengindikasikan pengendara untuk berhati-hati tanpa harus berhenti total. Konfigurasi waktu dapat diubah secara dinamis melalui UART.
+- **Deteksi Sirene Ambulans**: Memanfaatkan Algoritma Goertzel untuk mengekstraksi energi frekuensi suara secara jauh lebih efisien dibandingkan Discrete Fourier Transform (DFT) standar.
+- **Emergency Override**: Mengubah semua jalur menjadi mode peringatan darurat seketika saat ambulans terdeteksi.
 
-F_sample = 8000 Hz
-N = 100 
-F_target1 = 800 Hz
-F_target2 = 1500 Hz
+### Batasan
+- Asumsi sirene ambulans bergantian bolak-balik di frekuensi 800 Hz dan 1500 Hz dengan pola *fast yelp* (indikasi membawa pasien darurat).
+- Mengabaikan efek Doppler dari pergerakan kendaraan terhadap frekuensi sirene.
+- Asumsi semua pengendara menaati aturan saat mode darurat diaktifkan.
 
-k_1 = (800 * 100) / 8000 = 10
-k_2 = (1500 * 100) / 8000 = 18
+---
 
-w1 = (2pi * k_1) / N = 0.628
-w2 = (2pi * k_2) / N = 1.131
+## Hardware Design and Implementation Details
 
-coeff1 = 2cos(w1) = 2cos(0.628) = 1.618
-coeff2 = 2cos(w2) = 2cos(1.131) = 0.851
+Sistem ini mendistribusikan beban kerja secara efisien ke dalam dua unit mikrokontroler.
 
-### ubah koefisien menjadi integer 32-bit dengan format Q14
+* **Arduino Master (Traffic Controller):** Mengendalikan susunan LED lampu lalu lintas (Merah, Kuning, Hijau) untuk tiga arah menggunakan PORTB dan PORTD. Terhubung dengan modul RTC via jalur I2C (SDA/SCL) untuk sinkronisasi waktu aktual.
+* **Arduino Slave (Siren Detector):** Menggunakan sensor suara mikrofon yang terhubung ke pin ADC. Sistem ini menggunakan Timer0 untuk mengatur laju pengambilan sampel (*sampling rate*) pada tepat 8000 Hz.
+* **Jalur Komunikasi:** Menggunakan pin PD2 dari Slave yang dihubungkan ke pin INT0 pada Master. Slave akan menaikkan status pin ini menjadi HIGH (pulsa ~10ms) ketika sirene terkonfirmasi, yang secara langsung memicu interupsi eksternal di Master.
 
-coeff1 = 1.618 * 16384 = 26510
-coeff2 = 0.851 * 16384 = 13943
+### Komponen
 
-> ubah ke bentuk awal: shift kanan 14-bit
+| Komponen | Deskripsi |
+| :--- | :--- |
+| **2x Arduino Uno (ATmega328P)** | Bertindak sebagai unit Master dan Slave. |
+| **Modul RTC (I2C)** | Manajemen waktu *real-time* untuk penjadwalan mode malam. |
+| **Sensor Suara Mikrofon** | Menangkap audio lingkungan untuk dianalisis oleh Slave. |
+| **LED (Merah, Kuning, Hijau)** | Indikator visual lampu lalu lintas persimpangan. |
+| **Resistor** | Pembatas arus untuk memastikan komponen bekerja dalam batas aman. |
+
+**Rangkaian akhir**
+
+
+---
+
+## Software Implementation Details
+
+Program ditulis menggunakan instruksi tingkat rendah (AVR Assembly) untuk memastikan determinisme dan efisiensi waktu eksekusi yang ketat, hal ini sangat krusial pada rutinitas pemrosesan sinyal digital.
+
+### Algoritma Goertzel pada Slave
+Arduino Slave menggunakan Algoritma Goertzel untuk mendeteksi frekuensi target karena algoritma ini jauh lebih hemat siklus komputasi dibandingkan algoritma Fast Fourier Transform (FFT). FFT akan menghitung energi untuk semua rentang frekuensi secara bersamaan, sedangkan Goertzel hanya menghitung tepat pada titik frekuensi spesifik yang dicari (dalam kasus ini, 800 Hz dan 1500 Hz), sehingga mampu menghemat hingga 96% waktu operasi CPU.
+
+Sistem memproses audio dengan parameter perhitungan berikut:
+* `f_s` (Sample Rate) = 8000 Hz
+* `N` (Window Size) = 100 sampel (jeda 12.5 ms per jendela)
+* `f_target1` = 800 Hz
+* `f_target2` = 1500 Hz
+
+**Perhitungan Indeks Bin (k):**
+* `k_1 = round((800 * 100) / 8000) = 10`
+* `k_2 = round((1500 * 100) / 8000) = 19`
+
+**Koefisien Dasar (Floating Point):**
+* `omega_1 = (2 * pi * 10) / 100 ≈ 0.6283 rad  -->  coeff_1 = 2 * cos(0.6283) ≈ 1.6180`
+* `omega_2 = (2 * pi * 19) / 100 ≈ 1.1938 rad  -->  coeff_2 = 2 * cos(1.1938) ≈ 0.7362`
+
+**Konversi Skala Fixed-Point (Format Q14):**
+Karena mikrokontroler ATmega328P tidak mendukung perangkat keras *floating-point*, nilai koefisien dikalikan dengan 2^14 (16384) untuk disimpan dan dioperasikan sebagai integer 16-bit.
+* `COEFF_800 = round(1.6180 * 16384) = 26510`
+* `COEFF_1500 = round(0.7362 * 16384) = 12063`
+
+Jika Finite State Machine (FSM) mendeteksi transisi lonjakan energi yang memenuhi ambang batas antara target frekuensi 800 Hz dan 1500 Hz secara konsisten (minimal 4 alternasi), status dianggap valid sebagai suara sirene.
+
+### Software Used
+![Visual Studio Code](https://img.shields.io/badge/Visual%20Studio%20Code-0078d7.svg?style=for-the-badge&logo=visual-studio-code&logoColor=white)
+![Arduino](https://img.shields.io/badge/Arduino_IDE-00979D?style=for-the-badge&logo=arduino&logoColor=white)
+![Proteus](https://img.shields.io/badge/Proteus-Simulation-blue?style=for-the-badge&logoColor=white)
+![Assembly](https://img.shields.io/badge/Assembly-Language-critical?style=for-the-badge&logoColor=white)
+
+#### flowchart 
+**master.S**
+![image](https://hackmd.io/_uploads/HyJEzWDkGg.png)
+**slave.S**
+![image](https://hackmd.io/_uploads/BkJSzWvkfe.png)
+
+
+
+---
+
+## Test Result and Performance Evaluation
+
+
+| Parameter Pengujian | Gambar Rangkaian / Kondisi Fisik | Output Serial Monitor / UART |
+| :--- | :--- | :--- |
+| **Siklus Normal** | ![image](https://hackmd.io/_uploads/SkkTfZD1fe.png)| `Utara: HIJAU - 3 ...` |
+| **Transisi Mode Malam (Standby)** | ![image](https://hackmd.io/_uploads/SJVNmZPyGg.png)| `Input config: s19.00.00` |
+| **Deteksi Sirene Ambulans** | ![image](https://hackmd.io/_uploads/SyTBQ-vJze.png)| `Siren detected - Interrupting master...` |
+
+### Performance Evaluation
+Sistem merespons instruksi perubahan mode secara *real-time* sesuai dengan data modul RTC. Pada modul Slave, algoritma pemrosesan DSP yang diimplementasikan melalui operasi *fixed-point* dalam Assembly terbukti dapat mengkalkulasi tingkat energi frekuensi setiap 12.5 milidetik tanpa mengalami *bottleneck*, memberikan sisa *headroom* siklus komputasi yang besar bagi mikrokontroler untuk melakukan interupsi dan operasi I/O UART. Tantangan teknis yang memerlukan perhatian lebih adalah pada aspek sensitivitas perangkat keras mikrofon dan kalibrasi nilai *threshold* (LO dan HI) untuk mencegah indikasi positif palsu (*false-positive*) akibat bising jalanan biasa yang terdeteksi masuk ke dalam frekuensi bin.
+
+---
+
+## Conclusion and Future Work
+
+Sistem "Traffic Light System with Adjustable Modes and Ambulance Detection" berhasil menunjukkan bukti konsep nyata bahwa implementasi pemrosesan sinyal digital (Digital Signal Processing) dan arsitektur respons Master-Slave sangat dimungkinkan pada mikrokontroler 8-bit tanpa harus bergantung pada *library* dari bahasa tingkat tinggi. Hal ini menonjolkan efisiensi dan kecepatan *low-level programming*.
+
+Untuk penyempurnaan di masa depan, sistem dapat diperkuat dengan teknologi radio pemancar nirkabel (seperti modul RF atau LoRa) langsung dari unit ambulans ke lampu lalu lintas untuk mengatasi keterbatasan sensor akustik di lingkungan perkotaan yang berpolusi suara tinggi. Manajemen siklus persimpangan juga dapat ditingkatkan menggunakan sensor deteksi visual atau *loop detector* aspal untuk menyesuaikan durasi lampu hijau secara dinamis berdasarkan volume kepadatan antrean.
