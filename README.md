@@ -1,4 +1,4 @@
-<img width="682" height="362" alt="Screenshot 2026-05-17 155840" src="https://github.com/user-attachments/assets/b5ff2b55-246f-4e24-810e-244eccdc38f4" /># Traffic Light System with Adjustable Modes and Ambulance Detection
+# Traffic Light System with Adjustable Modes and Ambulance Detection
 
 ## Anggota Kelompok
 - Fauzan Arfa Nofiantoro - 2406411793
