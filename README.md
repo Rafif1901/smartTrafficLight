@@ -30,9 +30,9 @@
 
 ### Main Features
 - **Siklus Lampu Lalu Lintas Normal**: Beroperasi mengatur laju kendaraan untuk persimpangan tiga arah (Utara, Selatan, Timur).
-- **Mode Malam (Standby)**: Lampu kuning berkedip (*flashing*) otomatis pada rentang jam tertentu (misal: 19.00 - 05.00) mengindikasikan pengendara untuk berhati-hati tanpa harus berhenti total. Konfigurasi waktu dapat diubah secara dinamis melalui UART.
+- **Mode Malam (Standby)**: Lampu kuning berkedip dapat diaktifkan secara otomatis berdasarkan RTC maupun manual menggunakan switch. Waktu operating dan standby dapat dikonfigurasi secara dinamis melalui UART/Serial Monitor.
 - **Deteksi Sirene Ambulans**: Memanfaatkan Algoritma Goertzel untuk mengekstraksi energi frekuensi suara secara jauh lebih efisien dibandingkan Discrete Fourier Transform (DFT) standar.
-- **Emergency Override**: Mengubah semua jalur menjadi mode peringatan darurat seketika saat ambulans terdeteksi.
+- **Emergency Override**: Saat pola sirene ambulans valid terdeteksi, Arduino Slave mengirimkan External Interrupt ke Arduino Master sehingga sistem menghentikan siklus traffic light normal dan mengaktifkan kondisi seluruh lampu merah (all-red state) sebagai mode darurat.
 
 ### Batasan
 - Asumsi sirene ambulans bergantian bolak-balik di frekuensi 800 Hz dan 1500 Hz dengan pola *fast yelp* (indikasi membawa pasien darurat).
@@ -120,7 +120,7 @@ Jika Finite State Machine (FSM) mendeteksi transisi lonjakan energi yang memenuh
 | **Deteksi Sirene Ambulans** |<img width="682" height="362" alt="Screenshot 2026-05-17 155840" src="https://github.com/user-attachments/assets/43993e45-8edb-40ef-8ef8-f0829779393a" />| `Siren detected - Interrupting master...` |
 
 ### Performance Evaluation
-Sistem merespons instruksi perubahan mode secara *real-time* sesuai dengan data modul RTC. Pada modul Slave, algoritma pemrosesan DSP yang diimplementasikan melalui operasi *fixed-point* dalam Assembly terbukti dapat mengkalkulasi tingkat energi frekuensi setiap 12.5 milidetik tanpa mengalami *bottleneck*, memberikan sisa *headroom* siklus komputasi yang besar bagi mikrokontroler untuk melakukan interupsi dan operasi I/O UART. Tantangan teknis yang memerlukan perhatian lebih adalah pada aspek sensitivitas perangkat keras mikrofon dan kalibrasi nilai *threshold* (LO dan HI) untuk mencegah indikasi positif palsu (*false-positive*) akibat bising jalanan biasa yang terdeteksi masuk ke dalam frekuensi bin.
+Sistem berhasil merespons perubahan mode secara real-time berdasarkan RTC maupun konfigurasi serial monitor. Selain itu, interrupt dari modul deteksi sirene dapat melakukan override terhadap operating mode sehingga emergency mode dapat diaktifkan dengan cepat. Pada modul Slave, algoritma pemrosesan DSP yang diimplementasikan melalui operasi *fixed-point* dalam Assembly terbukti dapat mengkalkulasi tingkat energi frekuensi setiap 12.5 milidetik tanpa mengalami *bottleneck*, memberikan sisa *headroom* siklus komputasi yang besar bagi mikrokontroler untuk melakukan interupsi dan operasi I/O UART. Tantangan teknis yang memerlukan perhatian lebih adalah pada aspek sensitivitas perangkat keras mikrofon dan kalibrasi nilai *threshold* (LO dan HI) untuk mencegah indikasi positif palsu (*false-positive*) akibat bising jalanan biasa yang terdeteksi masuk ke dalam frekuensi bin.
 
 ---
 
@@ -128,4 +128,4 @@ Sistem merespons instruksi perubahan mode secara *real-time* sesuai dengan data 
 
 Sistem "Traffic Light System with Adjustable Modes and Ambulance Detection" berhasil menunjukkan bukti konsep nyata bahwa implementasi pemrosesan sinyal digital (Digital Signal Processing) dan arsitektur respons Master-Slave sangat dimungkinkan pada mikrokontroler 8-bit tanpa harus bergantung pada *library* dari bahasa tingkat tinggi. Hal ini menonjolkan efisiensi dan kecepatan *low-level programming*.
 
-Untuk penyempurnaan di masa depan, sistem dapat diperkuat dengan teknologi radio pemancar nirkabel (seperti modul RF atau LoRa) langsung dari unit ambulans ke lampu lalu lintas untuk mengatasi keterbatasan sensor akustik di lingkungan perkotaan yang berpolusi suara tinggi. Manajemen siklus persimpangan juga dapat ditingkatkan menggunakan sensor deteksi visual atau *loop detector* aspal untuk menyesuaikan durasi lampu hijau secara dinamis berdasarkan volume kepadatan antrean.
+Sistem hanya mendeteksi pola fast yelp 800–1500 Hz, belum mempertimbangkan efek Doppler dan noise lingkungan tinggi dapat mempengaruhi akurasi. Untuk penyempurnaan di masa depan, sistem dapat diperkuat dengan teknologi radio pemancar nirkabel (seperti modul RF atau LoRa) langsung dari unit ambulans ke lampu lalu lintas untuk mengatasi keterbatasan sensor akustik di lingkungan perkotaan yang berpolusi suara tinggi. Manajemen siklus persimpangan juga dapat ditingkatkan menggunakan sensor deteksi visual atau *loop detector* aspal untuk menyesuaikan durasi lampu hijau secara dinamis berdasarkan volume kepadatan antrean.
