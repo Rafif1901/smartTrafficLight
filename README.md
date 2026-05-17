@@ -1,4 +1,4 @@
-# Traffic Light System with Adjustable Modes and Ambulance Detection
+<img width="682" height="362" alt="Screenshot 2026-05-17 155840" src="https://github.com/user-attachments/assets/b5ff2b55-246f-4e24-810e-244eccdc38f4" /># Traffic Light System with Adjustable Modes and Ambulance Detection
 
 ## Anggota Kelompok
 - Fauzan Arfa Nofiantoro - 2406411793
@@ -100,9 +100,11 @@ Jika Finite State Machine (FSM) mendeteksi transisi lonjakan energi yang memenuh
 
 #### flowchart 
 **master.S**
-![image](https://hackmd.io/_uploads/HyJEzWDkGg.png)
+<img width="8045" height="2605" alt="master" src="https://github.com/user-attachments/assets/d84e189c-70d4-4b3d-ac11-867f5a280c82" />
+
 **slave.S**
-![image](https://hackmd.io/_uploads/BkJSzWvkfe.png)
+<img width="8191" height="1370" alt="slave" src="https://github.com/user-attachments/assets/0d1bd191-f3a3-47c1-b906-8389a8a1486e" />
+
 
 
 
@@ -113,9 +115,9 @@ Jika Finite State Machine (FSM) mendeteksi transisi lonjakan energi yang memenuh
 
 | Parameter Pengujian | Gambar Rangkaian / Kondisi Fisik | Output Serial Monitor / UART |
 | :--- | :--- | :--- |
-| **Siklus Normal** | ![image](https://hackmd.io/_uploads/SkkTfZD1fe.png)| `Utara: HIJAU - 3 ...` |
-| **Transisi Mode Malam (Standby)** | ![image](https://hackmd.io/_uploads/SJVNmZPyGg.png)| `Input config: s19.00.00` |
-| **Deteksi Sirene Ambulans** | ![image](https://hackmd.io/_uploads/SyTBQ-vJze.png)| `Siren detected - Interrupting master...` |
+| **Siklus Normal** |<img width="682" height="362" alt="Screenshot 2026-05-17 155840" src="https://github.com/user-attachments/assets/43993e45-8edb-40ef-8ef8-f0829779393a" />| `Utara: HIJAU - 3 ...` |
+| **Transisi Mode Malam (Standby)** |<img width="628" height="432" alt="Screenshot 2026-05-17 155815" src="https://github.com/user-attachments/assets/fd749e34-2457-4c5c-894f-5a14d7945935" />| `Input config: s19.00.00` |
+| **Deteksi Sirene Ambulans** |<img width="703" height="430" alt="Screenshot 2026-05-17 155618" src="https://github.com/user-attachments/assets/ae22e4ad-e6d2-4904-aeec-e67ffc23ba8c" />| `Siren detected - Interrupting master...` |
 
 ### Performance Evaluation
 Sistem merespons instruksi perubahan mode secara *real-time* sesuai dengan data modul RTC. Pada modul Slave, algoritma pemrosesan DSP yang diimplementasikan melalui operasi *fixed-point* dalam Assembly terbukti dapat mengkalkulasi tingkat energi frekuensi setiap 12.5 milidetik tanpa mengalami *bottleneck*, memberikan sisa *headroom* siklus komputasi yang besar bagi mikrokontroler untuk melakukan interupsi dan operasi I/O UART. Tantangan teknis yang memerlukan perhatian lebih adalah pada aspek sensitivitas perangkat keras mikrofon dan kalibrasi nilai *threshold* (LO dan HI) untuk mencegah indikasi positif palsu (*false-positive*) akibat bising jalanan biasa yang terdeteksi masuk ke dalam frekuensi bin.
